@@ -68,3 +68,14 @@ def index_path(catalog: Path | str | None = None) -> Path:
     if target == catalog_path():
         return cache_dir() / "extractions.sqlite"
     return target.with_name(target.stem + ".cache") / "extractions.sqlite"
+
+
+def metacache_path(catalog: Path | str | None = None) -> Path:
+    """The metadata cache (cache): provider responses (positive AND negative) and the front matter read from each file.
+    Lives beside the extraction store and follows the catalog the same way."""
+    return index_path(catalog).with_name("metadata.sqlite")
+
+
+def settings_path() -> Path:
+    """App-wide settings (config). Per-library overrides are a later milestone."""
+    return config_dir() / "settings.json"

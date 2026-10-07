@@ -53,6 +53,20 @@ class FileResult:
     notes: list[str] = field(default_factory=list)
 
 
+@dataclass
+class FrontResult:
+    """What a file says about itself on its first pages: all of it untrusted (`domain/frontmatter.py` weighs it)."""
+
+    ok: bool
+    page_count: int = 0
+    info: dict[str, str] = field(default_factory=dict)
+    xmp: str = ""
+    lines: list[dict[str, Any]] = field(default_factory=list)
+    page_size: list[float] | None = None
+    error: str | None = None
+    seconds: float = 0.0
+
+
 class _Worker:
     """One worker process plus the threads that read its pipes (a blocking read cannot be given a timeout on Windows)."""
 
@@ -243,6 +257,36 @@ class ExtractionSession:
         except Exception as exc:  # noqa: BLE001 - the contract is "always returns"
             self._discard_worker()
             return self._finish(result, pages, started, f"supervisor error: {type(exc).__name__}: {exc}")
+
+    def front_matter(self, path: str) -> FrontResult:
+        """The file's Info, XMP and first-page layout, or a failed result with the reason. Like `extract`, it ALWAYS
+        returns: a hang, crash, memory kill or garbage becomes `ok=False`, and the worker is replaced."""
+        started = time.monotonic()
+        try:
+            worker = self._ensure_worker()
+            worker.files_served += 1
+            if not worker.send({"cmd": "front", "path": path}):
+                self._discard_worker()
+                return FrontResult(False, error="the worker could not be reached", seconds=time.monotonic() - started)
+            deadline = started + self.open_timeout + self.page_timeout
+            while True:
+                kind, event = worker.next_event(deadline - time.monotonic())
+                if kind == "event" and event.get("type") not in ("front", "open_error"):
+                    continue
+                break
+            if kind != "event":
+                reason = "timed out reading the front matter" if kind == "timeout" else worker.why_it_ended()
+                self._discard_worker()
+                return FrontResult(False, error=reason, seconds=time.monotonic() - started)
+            if event["type"] == "open_error":
+                return FrontResult(False, error=event.get("error", "could not open the file"), seconds=time.monotonic() - started)
+            return FrontResult(
+                True, page_count=int(event.get("pages", 0)), info=dict(event.get("info") or {}), xmp=str(event.get("xmp") or ""),
+                lines=list(event.get("lines") or []), page_size=event.get("page_size"), seconds=time.monotonic() - started,
+            )
+        except Exception as exc:  # noqa: BLE001 - the contract is "always returns"
+            self._discard_worker()
+            return FrontResult(False, error=f"supervisor error: {type(exc).__name__}: {exc}", seconds=time.monotonic() - started)
 
     def _finish(self, result: FileResult, pages: dict[int, PageResult], started: float, error: str | None) -> FileResult:
         result.seconds = time.monotonic() - started

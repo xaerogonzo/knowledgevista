@@ -236,7 +236,8 @@ def test_explain_shows_locations_history_and_derived_availability(tmp_path):
     art = doc["artifacts"][0]
     assert art["available"] is True and art["canonical"] is True
     assert art["locations"][0]["history"][0]["event"] == "first_seen"
-    assert doc["metadata"]["status"] == "not_yet_available", "an unbuilt section must say so, not be left out"
+    assert doc["metadata"] == {"status": "available", "values": [], "candidates": [], "history": []}
+    assert doc["relations"]["status"] == "not_yet_available", "an unbuilt section must say so, not be left out"
     os.remove(env.lib / "a.txt")
     env.scan()
     doc = explain.explain_document(env.conn, document)
@@ -285,7 +286,7 @@ def test_doctor_is_clean_on_a_healthy_catalog_and_names_what_it_checked(tmp_path
     env = make_env(tmp_path, {"a.txt": "x"})
     env.scan()
     assert doctor.run_doctor(env.conn) == []
-    assert doctor.CHECKED_CATEGORIES == ["filesystem", "catalog", "extraction", "search"]
+    assert doctor.CHECKED_CATEGORIES == ["filesystem", "catalog", "extraction", "search", "metadata"]
 
 
 def test_doctor_reports_each_injected_defect_by_its_own_code(tmp_path):

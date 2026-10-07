@@ -1,7 +1,8 @@
 # Knowledge Vista
 
-> **Status: pre-alpha (milestone 2).** It scans folders and tracks files by content hash (surviving renames, moves and re-downloads),
-> reads PDF text safely, and searches it, saying what it could not search. No metadata (titles, authors), organiser or reader yet; see
+> **Status: pre-alpha (milestone 3).** It scans folders and tracks files by content hash (surviving renames, moves and re-downloads),
+> reads PDF text safely and searches it (saying what it could not search), and proposes a title and DOI for each document from the
+> file itself and, if you allow it, from Crossref, as proposals you review. No organiser or reader yet; see
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Point it at your mess of PDFs. Search them by what they contain. Find out what each one actually is. Nothing is moved,
@@ -32,7 +33,7 @@ first, and reversible.
 See [docs/INVARIANTS.md](docs/INVARIANTS.md), [docs/SAFETY_MODEL.md](docs/SAFETY_MODEL.md) and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Try it (milestones 1 and 2)
+## Try it (milestones 1 to 3)
 
 ```bash
 uv sync --extra extract        # PyMuPDF, needed only to read PDF text
@@ -47,10 +48,25 @@ uv run kv search "aqueous solubility"       # pages, with a statement of what co
 uv run kv search "solub*" --near compound   # explicit prefix; words within 30 of each other
 uv run kv show kaya2022.pdf --pdf-page 12   # or --label 164: physical position vs printed page number
 uv run kv import openchem-index "D:/path/Sci Downloads.index.sqlite"   # reuse an OpenChem index as provisional text
+uv run kv resolve              # propose DOIs and titles from the files themselves; accepts nothing; sends nothing
+uv run kv resolve --accept-safe   # ...and accept only the proposals that earned `safe` (a named, recorded rule)
+uv run kv review list          # what is waiting for you, most urgent first
+uv run kv review accept 3fa9c2d1   # or: kv metadata set kaya2022.pdf year 2022   (stated by you, so it is locked)
+```
+
+Looking things up online is **off** and stays off until you switch it on. It sends a DOI or a title to Crossref and nothing
+else (not a file name, a path or any text):
+
+```bash
+uv run kv resolve --online --list-requests   # exactly what would be sent; sends nothing
+uv run kv config set online_lookup true
+uv run kv config set mailto you@example.org  # optional: Crossref's courtesy address, sent only if you set it
+uv run kv resolve --online --accept-safe     # resumable: a stopped run continues from its cache
 ```
 
 Add `--json` for machine output (see [docs/CLI_CONTRACT.md](docs/CLI_CONTRACT.md)); [docs/SEARCH.md](docs/SEARCH.md) says
-exactly what search does and does not do. Nothing here writes to your folders.
+exactly what search does and does not do, and [docs/METADATA.md](docs/METADATA.md) what a proposal is, how a DOI is judged to be
+a document's own, and what the batch rule may and may not do. Nothing here writes to your folders.
 
 ## Develop
 

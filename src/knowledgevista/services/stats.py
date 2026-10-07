@@ -9,6 +9,7 @@ import sqlite3
 from collections import Counter
 
 from knowledgevista.domain.kinds import extension_kind, extension_of, kinds_disagree
+from knowledgevista.services.metadata_report import metadata_stats
 from knowledgevista.services.search import coverage
 
 
@@ -59,4 +60,5 @@ def library_stats(conn: sqlite3.Connection, index: sqlite3.Connection | None = N
             "catalog_revision": scalar("SELECT catalog_revision FROM library"),
         },
         "search": coverage(conn, index),
+        "metadata": metadata_stats(conn, index),
     }

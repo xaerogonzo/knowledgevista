@@ -19,7 +19,7 @@ from typing import Any
 from knowledgevista.db.migrations import current_version, load_migrations
 from knowledgevista.domain.pathkeys import fs_path
 
-CHECKED_CATEGORIES = ["filesystem", "catalog", "extraction", "search"]
+CHECKED_CATEGORIES = ["filesystem", "catalog", "extraction", "search", "metadata"]
 
 
 @dataclass
@@ -94,6 +94,7 @@ def run_doctor(conn: sqlite3.Connection, index: sqlite3.Connection | None = None
                 add("filesystem", "warning", code, f"{root['label']}: {counts[state]} file(s) are {state}.",
                     {"root_id": root["root_id"], "count": counts[state]})
     _check_extraction(conn, index, found)
+    _check_metadata(conn, found)
     return found
 
 
@@ -137,6 +138,38 @@ def _check_extraction(conn: sqlite3.Connection, index: sqlite3.Connection | None
     provisional = sum(1 for r in rows if r["source"] == IMPORTED_SOURCE and r["artifact_id"] in pdfs)
     if provisional:
         found.append(Finding("extraction", "info", "KVD_PROVISIONAL_IMPORT", f"{provisional} document(s) use text imported from the OpenChem index. It is searchable; kv extract --rebuild-imported replaces it with native extraction.", {"count": provisional}))
+
+
+def _check_metadata(conn: sqlite3.Connection, found: list[Finding]) -> None:
+    from knowledgevista.domain import fields as fieldmod
+
+    add = lambda *a, **k: found.append(Finding(*a, **k))  # noqa: E731
+    for row in conn.execute("SELECT run_id, started_at FROM resolve_run WHERE status = 'running'"):
+        add("metadata", "warning", "KVD_STALE_RESOLVE_RUN", "A resolve run was started and never finished (killed?). The next run closes it.",
+            {"run_id": row["run_id"], "started_at": row["started_at"]})
+    for row in conn.execute("SELECT document_id, field, value FROM metadata_value"):
+        try:
+            canonical = fieldmod.normalise(row["field"], row["value"]) if row["field"] != "authors" else row["value"]
+        except ValueError:
+            canonical = None
+        if canonical != row["value"]:
+            add("metadata", "error", "KVD_VALUE_NOT_CANONICAL", f"The accepted {row['field']} of a document is not in its canonical form.",
+                {"document_id": row["document_id"], "field": row["field"]})
+    for row in conn.execute("SELECT value, COUNT(*) AS n FROM metadata_value WHERE field = 'doi' GROUP BY value HAVING n > 1"):
+        add("metadata", "warning", "KVD_DOI_COLLISION", f"{row['n']} documents have the accepted DOI {row['value']}. They are reported, never merged: "
+            "decide whether they are the same work (kv explain on each).", {"doi": row["value"], "documents": row["n"]})
+    for row in conn.execute(
+        "SELECT mv.document_id, mv.field FROM metadata_value mv WHERE mv.source_candidate_id IS NOT NULL "
+        "AND NOT EXISTS (SELECT 1 FROM metadata_candidate c WHERE c.candidate_id = mv.source_candidate_id)"
+    ):
+        add("metadata", "error", "KVD_VALUE_WITHOUT_SOURCE", "An accepted value names a source proposal that does not exist.",
+            {"document_id": row["document_id"], "field": row["field"]})
+    for row in conn.execute(
+        "SELECT c.candidate_id FROM metadata_candidate c WHERE NOT EXISTS (SELECT 1 FROM document_artifact da "
+        "WHERE da.document_id = c.document_id AND da.artifact_id = c.artifact_id)"
+    ):
+        add("metadata", "error", "KVD_CANDIDATE_WRONG_ARTIFACT", "A proposal's evidence came from an artifact that does not belong to its document.",
+            {"candidate_id": row["candidate_id"]})
 
 
 def has_errors(findings: list[Finding]) -> bool:

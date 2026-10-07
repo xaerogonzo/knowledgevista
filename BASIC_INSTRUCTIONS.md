@@ -15,7 +15,7 @@
 
 ## Project Structure
 
-- `src/knowledgevista/` — the package (src layout). `paths.py` is the only module that decides where app data lives; `db/` holds connections and forward-only SQL migrations (`db/schema/NNNN_name.sql`); `cli.py` is a thin adapter over `services/` (scan, roots, resolve, explain, stats, doctor, verify, extract, search, pages); `domain/` is pure (ids, path keys, kind detection, text logic); `extract/` is the PDF worker process, its supervisor and the memory-limit mechanism; `index/` is the rebuildable extraction store (a cache SQLite file, never the catalog), the search query and the OpenChem-index importer; `errors.py` and `envelope.py` are the machine contract. Metadata, relations, MCP, the organizer and the GUI arrive with later milestones (see `docs/ARCHITECTURE.md`).
+- `src/knowledgevista/` — the package (src layout). `paths.py` is the only module that decides where app data lives; `db/` holds connections and forward-only SQL migrations (`db/schema/NNNN_name.sql`); `cli.py` is a thin adapter over `services/` (scan, roots, resolve, explain, stats, doctor, verify, extract, search, pages); `domain/` is pure (ids, path keys, kind detection, text logic); `extract/` is the PDF worker process, its supervisor and the memory-limit mechanism; `index/` is the rebuildable extraction store (a cache SQLite file, never the catalog), the search query and the OpenChem-index importer; `errors.py` and `envelope.py` are the machine contract. `network/` is the only code that opens a socket (policy, pacing, retries, the offline switch) and `providers/` turns a DOI or title into a normalised work (Crossref now); `domain/` also holds the metadata logic (`doi_evidence`, `local_evidence`, `match`, `frontmatter`, `titles`, `fields`); `services/resolve_metadata.py` is `kv resolve`, `review.py` the queue and the one batch rule, `metadata.py` the proposal/value/history store. Relations, MCP, the organizer and the GUI arrive with later milestones (see `docs/ARCHITECTURE.md`).
 - `tests/` — pytest suite. `pdfbuilders.py` generates every PDF fixture in code from synthetic text; `test_pdfbuilders.py` proves each fixture is what its name claims.
 - `tools/` — `check_repo_safe.py` (nothing a public repo must not carry) and `license_inventory.py` (licences over the lockfile's transitive closure). Both run in CI and are themselves tested.
 - `docs/` — architecture and policy documents; `docs/gotchas/` is delivered by TokenSave Manager and is not edited here.
@@ -59,6 +59,9 @@ Object model: Library > Root > Location > Artifact (sha256) > Extraction > Page;
 - `src/knowledgevista/db/schema/0002_identity.sql` — the identity schema; its constraints (one current location per path, one document per artifact, no active location without an artifact) are tested.
 - `tests/support.py` — `make_env` builds a library on disk with a catalog; `Env.snapshot()` compares catalogs without random IDs.
 - `tests/pdfbuilders.py` — the fixture builders; `10.5555` is Crossref's reserved test DOI prefix.
+- `docs/METADATA.md` — what a proposal is, how a printed DOI is judged to be a document's own, the safe rule and the privacy rules for the network. Read it before changing any score, threshold or provider behaviour.
+- `src/knowledgevista/domain/doi_evidence.py`, `local_evidence.py`, `match.py` — the scores and thresholds; each was chosen by looking at the real library and a provider's answers, and `MATCHER_VERSION` changes with them.
+- `src/knowledgevista/network/policy.py` — pacing, retries, `Retry-After`, the budget and the offline switch. No other module may open a socket.
 - `tools/check_repo_safe.py`, `tools/license_inventory.py` — the two CI guards.
 
 ---
@@ -75,5 +78,8 @@ Object model: Library > Root > Location > Artifact (sha256) > Extraction > Page;
 - **Mutation-test scanner changes.** `tests/test_scan.py` is the acceptance suite; after changing `services/scan.py`, plant faults (drop the move pairing, ignore `--full`, treat an unlistable directory as empty) and confirm a test goes red.
 - **Extracted text is derived, keyed by hash, and never trusted over the PDF.** The extraction store lives in the cache and is deleted-and-rebuilt on any schema mismatch; extraction refuses a file whose size/mtime differs from the scan (so text is never filed under the wrong bytes); `page_id` is internal and changes on re-extraction, so cite `artifact_id + pdf_page`. `pdf_page` (1-based position) and `printed_label` (a string) are never one parameter.
 - **A search must say what it could not see.** Never return a bare empty success: results carry coverage, and searching zero searchable documents is `KV_NOTHING_SEARCHABLE`.
+- **A proposal is not a fact.** `kv resolve` writes `metadata_candidate`; only a person, `kv metadata set`, or the named rule `safe_batch_v1` writes `metadata_value`. Unknown is no row. A provider that cannot answer is a state, never "no match", never cached, and never changes an accepted value.
+- **Only a DOI or a title leaves the machine**, and only when `online_lookup` is on AND `--online` is given. Tests prove "off" by making the transport fail the test if it is touched.
+- **A chapter never inherits its parent's DOI.** A DOI printed as "own" by three or more documents is a parent work (measured: 160 encyclopedia entries share one).
 - **Backups never copy the file.** The catalog is WAL; use `sqlite3.Connection.backup`.
 - **Writing patch scripts:** do not rely on shell heredocs for code containing backslashes or adjacent quotes (they get mangled); use the Edit or Write tools.

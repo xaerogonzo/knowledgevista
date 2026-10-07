@@ -7,7 +7,7 @@ What each kind of operation is allowed to touch. A command's category is part of
 |---|---|---|---|
 | **Read** | the catalog and cache, read-only | `search`, `show`, `explain`, `doctor`, `verify`, `dupes` | Leaves source bytes unchanged (asserted by hash in tests). `doctor` diagnoses and never repairs by default. |
 | **Catalog mutation** | the catalog only | `scan`, `resolve`, accepting a candidate, tagging, annotating | Recorded with an actor and a history entry. Never deletes history. Never holds a write transaction across network I/O. |
-| **Network** | outbound requests | metadata lookup | Off by default. Sends only a DOI or title, listed beforehand. Never document text. One central policy owns the User-Agent, timeouts, retries and the offline flag. Opening a file never triggers a lookup. |
+| **Network** | outbound requests | `resolve --online` | Off by default: the `online_lookup` setting must be on AND `--online` given; a damaged settings file means off. Sends only a DOI or title (and the contact address the user chose), listed beforehand by `--list-requests`. Never document text, a path, a file name or a hash. `network/policy.py` owns the User-Agent, timeouts, retries, pacing, request budget and the offline flag, and is the only code that touches a socket. A provider that cannot answer changes nothing (never "no match", never cached). Opening a file never triggers a lookup. |
 | **Filesystem mutation** | the user's files | `apply`, `undo` | Plan, review, precheck, apply, verify. Reversible. Refuses unless the root has `allow_organize`. Aborts an item whose source hash changed. Never deletes. |
 
 ## Default posture

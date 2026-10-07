@@ -17,13 +17,21 @@ from typing import Any
 from knowledgevista import __version__, paths
 from knowledgevista.db.catalog import open_catalog
 from knowledgevista.db.migrations import SchemaTooNew
+from knowledgevista.domain import fields as fieldmod
 from knowledgevista.envelope import Envelope
 from knowledgevista.errors import EXIT_FAILURE, EXIT_INVALID, EXIT_OK, ErrorCode, KvError
 from knowledgevista.extract.client import ExtractionSession
 from knowledgevista.index.importer import import_openchem_index
+from knowledgevista.index.metacache import open_metacache
 from knowledgevista.index.search import parse_query
 from knowledgevista.index.store import open_index
+from knowledgevista.network.policy import Fetcher, NetworkPolicy
+from knowledgevista.providers.crossref import CrossrefProvider
 from knowledgevista.services import doctor as doctor_service
+from knowledgevista.services import metadata as metadata_service
+from knowledgevista.services import resolve_metadata as resolve_metadata_service
+from knowledgevista.services import review as review_service
+from knowledgevista.services import settings as settings_service
 from knowledgevista.services import extract as extract_service
 from knowledgevista.services import pages as pages_service
 from knowledgevista.services import search as search_service
@@ -145,6 +153,14 @@ def cmd_stats(args: argparse.Namespace) -> Outcome:
         f"({stats['search']['not_yet_extracted']} not extracted yet, {stats['search']['no_text_layer']} scans with no text layer, "
         f"{stats['search']['partially_indexed']} partial, {stats['search']['extraction_failed']} failed)",
     ]
+    meta = stats["metadata"]
+    if meta["pdf_documents"]:
+        pct = lambda value: "n/a" if value is None else f"{value:.0%}"  # noqa: E731
+        lines.append(f"Metadata: of {meta['pdf_documents']} PDFs, {meta['accepted'].get('doi', 0)} have an accepted DOI ({pct(meta['doi_coverage'])}), "
+                     f"{meta['accepted'].get('title', 0)} a title ({pct(meta['title_coverage'])}); "
+                     f"{meta['review_queue']['proposed_items']} proposal(s) wait for review ({meta['review_queue']['safe']} safe for the batch rule)")
+        for reason, count in sorted(meta["titles_without"].items(), key=lambda item: -item[1]):
+            lines.append(f"  no title: {count} - {meta['title_reasons'].get(reason, reason)}")
     return Outcome([stats], lines=lines)
 
 
@@ -166,6 +182,13 @@ def cmd_explain(args: argparse.Namespace) -> Outcome:
         for loc in art["locations"]:
             ended = f"  ended ({loc['end_reason']})" if loc["ended_at"] else ""
             out.lines.append(f"    {loc['state']:12} {loc['root']}/{loc['path']}{ended}")
+    meta = doc["metadata"]
+    for value in meta["values"]:
+        out.lines.append(f"  {value['field']:9} {value['display'][:90]}   ({value['origin']} from {value['source']}, accepted by {value['accepted_by']}"
+                         f"{', LOCKED' if value['locked'] else ''})")
+    waiting = [c for c in meta["candidates"] if c["status"] == "proposed"]
+    if waiting:
+        out.lines.append(f"  {len(waiting)} proposal(s) waiting: kv review list")
     out.lines += [f"  warning: {w['message']}" for w in out.warnings]
     return out
 
@@ -330,6 +353,183 @@ def cmd_import_index(args: argparse.Namespace) -> Outcome:
     return out
 
 
+def _label(conn, document_id: str) -> str:
+    """A short human name for a document: its current path, else the start of its id."""
+    row = conn.execute(
+        "SELECT l.relative_path FROM location l JOIN document_artifact da ON da.artifact_id = l.artifact_id "
+        "WHERE da.document_id = ? AND l.ended_at IS NULL ORDER BY l.state, l.path_key LIMIT 1", (document_id,)).fetchone()
+    return row[0] if row else document_id[:12]
+
+
+def cmd_resolve(args: argparse.Namespace) -> Outcome:
+    conn = open_catalog(_catalog_path(args), create=False)
+    index = _index(args, create=False, read_only=True)
+    cache = open_metacache(paths.metacache_path(_catalog_path(args)), create=True)
+    out = Outcome()
+    try:
+        if args.list_requests:
+            plan = resolve_metadata_service.planned_requests(conn, cache)
+            out.records = [{"type": "summary", "requests": len(plan), "dois": sum(p["sends"] == "doi" for p in plan),
+                            "titles": sum(p["sends"] == "title" for p in plan), "already_cached": sum(p["cached"] for p in plan)}]
+            out.records += [{"type": "request", **p} for p in plan]
+            out.lines = [f"{p['sends']:5} {p['value']}{'   (cached: not sent)' if p['cached'] else ''}" for p in plan]
+            out.lines.append(f"{len(plan)} lookup(s) would be considered ({out.records[0]['already_cached']} already cached). Nothing was sent. "
+                             "Only a DOI or a title leaves the machine.")
+            return out
+        if index is None:
+            raise KvError(ErrorCode.NOT_EXTRACTED, "Nothing has been extracted yet, so there is no text to read DOIs and titles from. Run: kv extract")
+        settings = settings_service.load()
+        provider = None
+        if args.online:
+            if not settings["online_lookup"]:
+                raise KvError(ErrorCode.NETWORK_DISABLED,
+                              "Online lookups are switched off. They send a DOI or a title to a metadata provider (Crossref) and nothing else. "
+                              "To allow them: kv config set online_lookup true", {"setting": "online_lookup"})
+            policy = NetworkPolicy(online=True, mailto=settings["mailto"], request_budget=args.max_requests or settings["request_budget"])
+            provider = CrossrefProvider(Fetcher(policy), cache=cache)
+            _say(f"online: DOIs and titles will be sent to api.crossref.org (at most {policy.request_budget} requests)"
+                 + ("" if policy.mailto else "; no contact address is set (kv config set mailto you@example.org)"))
+        document_ids = [resolve_service.resolve_one(conn, args.document).document_id] if args.document else None
+        root_ids = [r.root_id for r in roots_service.find_roots(conn, args.root)] if args.root else None
+        session = None if args.no_front else ExtractionSession(memory_limit_mb=args.memory_limit_mb, page_timeout=args.page_timeout)
+        try:
+            report = resolve_metadata_service.resolve_library(
+                conn, index, cache, provider=provider, online=args.online, accept_safe=args.accept_safe, session=session,
+                read_front=not args.no_front, force_front=args.refresh_front, document_ids=document_ids, root_ids=root_ids,
+                limit=args.limit, progress=_say)
+        finally:
+            if session is not None:
+                session.close()
+        queue_items = review_service.queue(conn, limit=0)[1]
+    finally:
+        conn.close()
+        cache.close()
+        if index is not None:
+            index.close()
+    local, found, accepted, online = report["local"], report["doi_classes"], report["accepted"], report["online"]
+    stopped = online.get("stopped")
+    out.complete = not (args.online and stopped)
+    out.records.append({"type": "summary", "review_queue_items": queue_items, **report})
+    out.lines.append(f"Resolved {report['documents']} document(s) ({report['not_extracted']} not extracted yet): printed DOI found for "
+                     f"{found.get('own', 0)}, undecided for {found.get('ambiguous', 0)}, none for {found.get('none', 0)}.")
+    out.lines.append("Proposals: " + ", ".join(f"{local.get(k, 0)} {k}" for k in ("new", "updated", "unchanged", "stale", "decided") if local.get(k)) + "." if local else "Proposals: none.")
+    if args.online:
+        out.lines.append(f"Online: {online['requests']} request(s), {online['cache_hits']} answered from the cache; "
+                         f"answers: {', '.join(f'{k} {v}' for k, v in sorted(online['states'].items())) or 'none'}"
+                         + (f"; checked {online.get('dois_checked', 0)} DOI(s), {online.get('title_searches', 0)} title search(es)" if online.get('dois_checked') or online.get('title_searches') else "") + ".")
+    if args.accept_safe:
+        out.lines.append(f"Accepted by the safe rule: {accepted['total']}" + (" (" + ", ".join(f"{k} {v}" for k, v in sorted(accepted.items()) if k != "total") + ")" if accepted["total"] else "") + ".")
+    out.lines.append(f"{queue_items} item(s) wait for review: kv review list")
+    if stopped:
+        out.warnings.append({"code": "KV_PROVIDER_STOPPED", "message": f"Online lookups stopped early: {stopped}. Nothing accepted was changed; run again later and it resumes from the cache.",
+                             "details": {"reason": stopped}})
+    for skipped in report["skipped_by_rule"]:
+        out.warnings.append({"code": "KV_SAFE_RULE_SKIPPED", "message": f"The safe rule left the {skipped['field']} alone: {skipped['reason']}.", "details": skipped})
+    for problem in report["problems"]:
+        out.warnings.append({"code": "KV_RESOLVE_PROBLEM", "message": problem["message"], "details": problem})
+    if report["front"].get("unavailable") and not args.no_front:
+        out.warnings.append({"code": "KV_FRONT_MATTER_UNAVAILABLE", "message": f"The front matter of {report['front']['unavailable']} file(s) was not read "
+                             "(PyMuPDF is not installed, or the file is not reachable); titles from the layout and the file's metadata are missing for them."})
+    out.lines += [f"  note: {w['message']}" for w in out.warnings]
+    return out
+
+
+def cmd_review_list(args: argparse.Namespace) -> Outcome:
+    conn = open_catalog(_catalog_path(args), create=False, read_only=True)
+    try:
+        include = ("proposed", "set_aside", "stale", "rejected") if args.status == "all" else (args.status,)
+        items, total = review_service.queue(conn, field_=args.field, review=args.review, include=include, limit=args.limit, offset=args.offset)
+        for item in items:
+            item["label"] = _label(conn, item["document_id"])
+    finally:
+        conn.close()
+    out = Outcome([{"type": "summary", "total": total, "shown": len(items), "offset": args.offset}], complete=args.offset + len(items) >= total)
+    out.records += [{"type": "item", **i} for i in items]
+    for i in items:
+        hint = f"   [differs from accepted: {i['differs_from_accepted']}]" if i["differs_from_accepted"] else ""
+        out.lines.append(f"{i['candidate_ids'][0][:10]}  {i['field']:9} {i['confidence']:9} {i['review']:8} {i['display'][:70]}{hint}\n"
+                         f"             {i['label']}  <- {', '.join(i['sources'])}")
+    out.lines.append(f"{len(items)} of {total} item(s)" + ("" if out.complete else f" (use --offset {args.offset + len(items)} for more)"))
+    return out
+
+
+def cmd_review_accept(args: argparse.Namespace) -> Outcome:
+    if not args.safe and not args.candidates:
+        raise KvError(ErrorCode.INVALID_ARGUMENTS, "Name the candidate(s) to accept (ids from: kv review list), or use --safe for the batch rule.")
+    conn = open_catalog(_catalog_path(args), create=False)
+    out = Outcome()
+    try:
+        if args.safe:
+            batch = review_service.accept_safe(conn)
+            accepted, skipped = batch.accepted, batch.skipped
+        else:
+            accepted, skipped = [metadata_service.accept_candidate(conn, review_service.resolve_candidate_id(conn, c), actor="user") for c in args.candidates], []
+        for item in accepted:
+            out.records.append({"type": "accepted", "candidate_id": item.candidate_id, "document_id": item.document_id, "field": item.field,
+                                "value": item.value, "changed": item.changed, "replaced": item.replaced})
+            out.lines.append(f"accepted {item.field}: {item.value[:80]}  ({_label(conn, item.document_id)})")
+        for item in skipped:
+            out.warnings.append({"code": "KV_SAFE_RULE_SKIPPED", "message": f"left the {item['field']} alone: {item['reason']}", "details": item})
+    finally:
+        conn.close()
+    out.lines.append(f"{sum(1 for r in out.records if r['changed'])} value(s) changed, {len(out.records)} proposal(s) accepted."
+                     + (f" {len(out.warnings)} left for a person." if out.warnings else ""))
+    return out
+
+
+def cmd_review_reject(args: argparse.Namespace) -> Outcome:
+    conn = open_catalog(_catalog_path(args), create=False)
+    out = Outcome()
+    try:
+        for reference in args.candidates:
+            candidate_id = review_service.resolve_candidate_id(conn, reference)
+            changed = metadata_service.reject_candidate(conn, candidate_id)
+            out.records.append({"type": "rejected", "candidate_id": candidate_id, "changed": changed})
+            out.lines.append(f"{'rejected' if changed else 'already rejected'}: {candidate_id[:10]}")
+    finally:
+        conn.close()
+    return out
+
+
+def cmd_metadata(args: argparse.Namespace) -> Outcome:
+    conn = open_catalog(_catalog_path(args), create=False)
+    try:
+        document_id = resolve_service.resolve_one(conn, args.reference).document_id
+        action = args.metadata_command
+        if action == "set":
+            changed = metadata_service.set_value(conn, document_id, args.field, args.value, lock=not args.no_lock)
+            line = f"{args.field} set{'' if args.no_lock else ' and locked'}" if changed else f"{args.field} already has that value"
+        elif action == "clear":
+            changed = metadata_service.clear_value(conn, document_id, args.field)
+            line = f"{args.field} cleared (back to unknown)" if changed else f"{args.field} had no value"
+        else:
+            changed = metadata_service.set_lock(conn, document_id, args.field, action == "lock")
+            line = f"{args.field} {action}ed" if changed else f"{args.field} was already {action}ed"
+        values = metadata_service.get_values(conn, document_id)
+        current = values.get(args.field)
+    finally:
+        conn.close()
+    return Outcome([{"type": "metadata", "document_id": document_id, "field": args.field, "changed": changed,
+                     "value": current["value"] if current else None, "locked": bool(current["locked"]) if current else None}], lines=[line])
+
+
+def cmd_config(args: argparse.Namespace) -> Outcome:
+    action = args.config_command
+    if action == "set":
+        value = settings_service.set_value(args.key, args.value)
+        return Outcome([{"type": "setting", "key": args.key, "value": value, "default": settings_service.DEFAULTS[args.key]}],
+                       lines=[f"{args.key} = {value}"])
+    current = settings_service.load()
+    keys = [args.key] if action == "get" else list(settings_service.DEFAULTS)
+    if action == "get" and args.key not in settings_service.DEFAULTS:
+        raise KvError(ErrorCode.INVALID_ARGUMENTS, f"Unknown setting {args.key!r}. Settings: {', '.join(settings_service.DEFAULTS)}")
+    out = Outcome([{"type": "setting", "key": k, "value": current[k], "default": settings_service.DEFAULTS[k], "help": settings_service.HELP[k]} for k in keys])
+    out.lines = [f"{k} = {current[k]}" + (f"    # {settings_service.HELP[k]}" if action == "list" else "") for k in keys]
+    if current.problem:
+        out.warnings.append({"code": "KV_SETTINGS_IGNORED", "message": current.problem})
+        out.lines.append(f"note: {current.problem}")
+    return out
+
 
 # --- parser and entry point -------------------------------------------------------------------------------------
 
@@ -398,6 +598,61 @@ def build_parser(json_mode: bool = False) -> _Parser:
                             help="use a '<library>.index.sqlite' from OpenChem as provisional search text")
     oc.add_argument("path")
     oc.set_defaults(handler=cmd_import_index)
+
+    resolve = sub.add_parser("resolve", parents=[shared], help="propose titles, DOIs and authors from the files (and, if allowed, a provider)")
+    resolve.add_argument("--online", action="store_true",
+                         help="also ask a metadata provider (needs: kv config set online_lookup true). Only a DOI or a title is sent")
+    resolve.add_argument("--list-requests", action="store_true", help="show what --online would send and send nothing")
+    resolve.add_argument("--accept-safe", action="store_true", help="accept the proposals that earned `safe` (the named batch rule); nothing else")
+    resolve.add_argument("--document", help="only this document (id, sha256 prefix or path)")
+    resolve.add_argument("--root", help="only documents reachable under this root")
+    resolve.add_argument("--limit", type=int, help="stop after this many documents")
+    resolve.add_argument("--max-requests", type=int, help="the most requests this run may make (default: the request_budget setting)")
+    resolve.add_argument("--no-front", action="store_true", help="do not open the PDFs for their layout, Info and XMP (text only)")
+    resolve.add_argument("--refresh-front", action="store_true", help="read the PDFs' front matter again even if it is cached")
+    resolve.add_argument("--memory-limit-mb", type=int, default=2048)
+    resolve.add_argument("--page-timeout", type=float, default=60.0)
+    resolve.set_defaults(handler=cmd_resolve)
+
+    rev = sub.add_parser("review", parents=[shared], help="the queue of proposals waiting for a person")
+    rev_sub = rev.add_subparsers(dest="review_command", metavar="action", required=True, parser_class=lambda **kw: _Sub(json_mode, **kw))
+    rev_list = rev_sub.add_parser("list", parents=[shared], help="list proposals, most urgent first")
+    rev_list.add_argument("--field", choices=fieldmod.FIELDS)
+    rev_list.add_argument("--review", choices=("safe", "required"), help="only proposals the batch rule may accept / only those a person must")
+    rev_list.add_argument("--status", choices=("proposed", "set_aside", "stale", "rejected", "all"), default="proposed")
+    rev_list.add_argument("--limit", type=int, default=25)
+    rev_list.add_argument("--offset", type=int, default=0)
+    rev_list.set_defaults(handler=cmd_review_list)
+    rev_accept = rev_sub.add_parser("accept", parents=[shared], help="accept proposals (ids from `review list`), or --safe for the batch rule")
+    rev_accept.add_argument("candidates", nargs="*", help="candidate ids (8+ characters)")
+    rev_accept.add_argument("--safe", action="store_true", help="apply the safe batch rule to every document")
+    rev_accept.set_defaults(handler=cmd_review_accept)
+    rev_reject = rev_sub.add_parser("reject", parents=[shared], help="decide a proposal is wrong (it is kept, and not proposed again)")
+    rev_reject.add_argument("candidates", nargs="+")
+    rev_reject.set_defaults(handler=cmd_review_reject)
+
+    meta = sub.add_parser("metadata", parents=[shared], help="state, clear or lock a document's metadata by hand")
+    meta_sub = meta.add_subparsers(dest="metadata_command", metavar="action", required=True, parser_class=lambda **kw: _Sub(json_mode, **kw))
+    for action, text in (("set", "state a value (locked unless --no-lock)"), ("clear", "back to unknown"), ("lock", "protect the value from every resolver"),
+                         ("unlock", "let resolvers propose a different value again")):
+        one = meta_sub.add_parser(action, parents=[shared], help=text)
+        one.add_argument("reference", help="a document id, sha256 prefix or path")
+        one.add_argument("field", choices=fieldmod.FIELDS)
+        if action == "set":
+            one.add_argument("value")
+            one.add_argument("--no-lock", action="store_true")
+        one.set_defaults(handler=cmd_metadata)
+
+    cfg = sub.add_parser("config", parents=[shared], help="app-wide settings (online lookups are off by default)")
+    cfg_sub = cfg.add_subparsers(dest="config_command", metavar="action", required=True, parser_class=lambda **kw: _Sub(json_mode, **kw))
+    cfg_sub.add_parser("list", parents=[shared], help="show every setting").set_defaults(handler=cmd_config)
+    cfg_get = cfg_sub.add_parser("get", parents=[shared], help="show one setting")
+    cfg_get.add_argument("key")
+    cfg_get.set_defaults(handler=cmd_config)
+    cfg_set = cfg_sub.add_parser("set", parents=[shared], help="change a setting")
+    cfg_set.add_argument("key")
+    cfg_set.add_argument("value")
+    cfg_set.set_defaults(handler=cmd_config)
     return parser
 
 
@@ -430,7 +685,7 @@ def main(argv: list[str] | None = None) -> int:
         if handler is None:
             raise KvError(ErrorCode.INVALID_ARGUMENTS, "No command given. Try: kv --help")
         command = args.command
-        if command in ("root", "import"):
+        if command in ("root", "import", "review", "metadata", "config"):
             command = f"{command} {getattr(args, command + '_command')}"
         outcome = handler(args)
     except KvError as exc:

@@ -218,6 +218,16 @@ def page_text(connection: sqlite3.Connection, page_id: int) -> str:
     return row[0] if row else ""
 
 
+def extraction_pages(connection: sqlite3.Connection, artifact_id: str) -> list[tuple[int, str]]:
+    """Every page of an artifact's extraction as `(pdf_page, text)` in page order; a page with no text yields ''."""
+    rows = connection.execute(
+        "SELECT p.pdf_page, f.text FROM extraction e JOIN page p ON p.extraction_id = e.extraction_id "
+        "LEFT JOIN page_fts f ON f.rowid = p.page_id WHERE e.artifact_id = ? ORDER BY p.pdf_page",
+        (artifact_id,),
+    ).fetchall()
+    return [(r[0], r[1] or "") for r in rows]
+
+
 def consistency_problems(connection: sqlite3.Connection) -> list[str]:
     """Structural disagreements between the tables, for `doctor`. Cheap: counts and anti-joins, no text read."""
     problems = []

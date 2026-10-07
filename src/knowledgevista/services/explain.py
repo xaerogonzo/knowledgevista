@@ -1,7 +1,7 @@
 """`kv explain`: everything the catalog knows about one document, and where each fact came from.
 
 Read-only. Built to answer "what is this, where is it, what happened to it, and is anything wrong?" without anyone
-reading SQL. Sections that belong to later milestones (metadata, relations, extraction) say so explicitly rather than
+reading SQL. Sections that belong to later milestones (relations, extraction) say so explicitly rather than
 being left out: an absent section would read as "none exist".
 """
 
@@ -11,6 +11,7 @@ import sqlite3
 
 from knowledgevista.domain.kinds import extension_kind, extension_of, kinds_disagree
 from knowledgevista.errors import ErrorCode, KvError
+from knowledgevista.services.metadata_report import document_metadata
 
 
 def explain_document(conn: sqlite3.Connection, document_id: str) -> dict:
@@ -67,7 +68,7 @@ def explain_document(conn: sqlite3.Connection, document_id: str) -> dict:
             })
     return {
         "document_id": document_id, "created_at": document["created_at"], "artifacts": artifacts,
-        "metadata": {"status": "not_yet_available", "note": "Titles, authors and DOIs arrive with a later milestone."},
+        "metadata": document_metadata(conn, document_id),
         "relations": {"status": "not_yet_available"}, "extraction": {"status": "not_yet_available"},
         "warnings": warnings,
     }
