@@ -15,6 +15,9 @@ jobs:
       - name: Install (all extras and the dev group)
         run: uv sync --all-extras --group dev
       - name: Tests
+        # The window's tests run offscreen. With the gui extra missing they must FAIL, not skip: a green run that skipped the window is not green.
+        env:
+          KV_REQUIRE_GUI: "1"
         run: uv run python -m pytest -q
       - name: Nothing a public repository must not carry
         run: uv run python tools/check_repo_safe.py

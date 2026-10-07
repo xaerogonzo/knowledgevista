@@ -79,3 +79,9 @@ def metacache_path(catalog: Path | str | None = None) -> Path:
 def settings_path() -> Path:
     """App-wide settings (config). Per-library overrides are a later milestone."""
     return config_dir() / "settings.json"
+
+
+def gui_state_path() -> Path:
+    """What the library window remembers between runs (config): size, layout, the scope and document it was showing. A convenience,
+    never state of the library: deleting it loses nothing but where the window was."""
+    return config_dir() / "gui-state.json"

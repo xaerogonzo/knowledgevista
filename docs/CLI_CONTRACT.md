@@ -143,6 +143,7 @@ a caller can refuse to run the ones that are not read-only.
 | `locate <reference> [--no-disk-check]` | read | where a document or file is NOW, from a document id, a SHA-256 (or prefix), a path or a `knowledgevista://` reference: every current path, whether each is really on disk, what the library knows. The call OpenChem makes |
 | `open <reference> [--pdf-page N \| --label L] [--no-launch]` | read | hand the file to the operating system's viewer (starts a program; changes nothing in the library). The page is reported, not navigated to |
 | `mcp` | read | serve the read-only Model Context Protocol tools on stdin/stdout (no envelope: stdout carries only protocol replies) |
+| `gui` | catalog | open the library window (the `gui` extra; no envelope, it is for a person). The window reads and, when a person asks, changes the catalog through the same services as the commands above; it never moves a file. See [GUI.md](GUI.md) |
 | `view [name] [--limit N] [--cursor C]` | read | a system view (`inbox`, `unresolved`, `ambiguous`, `missing`, `duplicates`, `new`, `untagged`, `uncollected`). A view is a query, not stored state; with no name, lists them |
 
 ## Cursors and limits

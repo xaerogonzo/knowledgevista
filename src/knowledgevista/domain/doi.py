@@ -26,7 +26,9 @@ from dataclasses import dataclass
 _DOI = re.compile(r"\b(10\.\d{4,9}/[^\s\"<>\x00-\x1f\x7f­​-‍⁠﻿]+)", re.IGNORECASE)
 _PREFIX = re.compile(r"^\s*(?:doi\s*:\s*|https?://(?:dx\.)?doi\.org/)", re.IGNORECASE)
 _VALID = re.compile(r"^10\.\d{4,9}/\S+$")
-_TRAILING_PUNCTUATION = ".,;:'\"”’"
+#: Sentence punctuation that follows a DOI. The typographic forms are here because a PDF's metadata and text carry them: found by the library window,
+#: which showed a real DOI with a trailing U+201A (a comma look-alike) as a second, DIFFERENT proposal beside the right one.
+_TRAILING_PUNCTUATION = ".,;:'\"”’‚„“‘…»"
 _BRACKETS = {")": "(", "]": "[", "}": "{"}
 #: A wrapped DOI's first line ends in one of these, because a line is broken after a separator.
 _WRAP_SEPARATORS = ".-/_"

@@ -17,3 +17,11 @@ def isolated_home(tmp_path, monkeypatch):
     home = tmp_path / "kv-home"
     monkeypatch.setenv(paths.HOME_ENV, str(home))
     return home
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    """The one QApplication (Qt allows one per process). Window tests ask for this; nothing else needs Qt."""
+    from guisupport import application
+
+    return application()

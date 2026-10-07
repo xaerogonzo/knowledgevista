@@ -13,7 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from knowledgevista import __version__, cli_integration, cli_organize, cli_relations, paths
+from knowledgevista import __version__, cli_gui, cli_integration, cli_organize, cli_relations, paths
 from knowledgevista.cli_support import Outcome
 from knowledgevista.cli_support import catalog_path as _catalog_path
 from knowledgevista.cli_support import index_for as _index
@@ -616,6 +616,7 @@ def build_parser(json_mode: bool = False) -> _Parser:
     cli_relations.add_parsers(sub, shared, lambda **kw: _Sub(json_mode, **kw))
     cli_integration.add_parsers(sub, shared, lambda **kw: _Sub(json_mode, **kw))
     cli_organize.add_parsers(sub, shared, lambda **kw: _Sub(json_mode, **kw))
+    cli_gui.add_parsers(sub, shared, lambda **kw: _Sub(json_mode, **kw))
     return parser
 
 

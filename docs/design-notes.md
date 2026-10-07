@@ -32,6 +32,14 @@ being folded into the plan; an entry reopens the architecture only if it contrad
 | Persisting filename hints beyond a title (author + year such as `kaya2022`) as supporting evidence in matches | a match is wrong or missed in a way an author/year hint would have separated |
 | Old Wiley "SICI" DOIs containing `<` and `>` | one is seen in a real library. The DOI pattern stops at those characters (as the OpenChem index did), so such a DOI is cut short and then fails the provider check, costing a missed match and never a wrong one |
 | Bulk review shortcuts (`kv review accept --field title --confidence medium`) | a person actually faces hundreds of layout-only titles (the real library has ~380) and wants one decision for a class |
+| Applying a plan from the window (`kv apply` as a button) | a person asks for it AND the plan preview has been used on a real library for a while. The window proposes and saves; the one mover stays a command with a dry run |
+| Removing a document from a collection, deleting a collection, saved searches, and multi-select tag/collect in the window | a person manages collections in the window often enough that the command line is the friction (the services exist: `organize.remove_from_collection`, `retire_collection`, `save_search`) |
+| Multi-select accept/reject in the Review tab | the queue is long and the safe filter plus "accept all safe" is not enough (the real library: 1,488 waiting, 13 safe) |
+| An online-lookup button | it needs its own consent screen that lists exactly what is sent (the `--list-requests` output) before anything leaves the machine; until then `kv resolve --online` is the only door |
+| A stopped scan shows once in Health as an "interrupted scan" | a person stops scans often. `interrupted_scans` counts every `interrupted` run (a crash and a deliberate Stop look the same in the catalog); a `stopped` status would separate them |
+| A keyboard map and an accessibility pass (tab order, screen-reader names) | the window has a user who needs it; every control already has an object name and a plain-text label |
+| Page-targeted open and search-hit-to-page navigation | milestone 8, the built-in reader |
+| A search that failed is remembered in the window's state and re-run (and re-fails) at the next start | it annoys someone; the fix is to remember only searches that succeeded |
 
 ## Open questions to settle by measurement
 

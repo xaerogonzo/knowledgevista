@@ -24,6 +24,8 @@ THIRD = "10.5555/kv.third.0003"
 @pytest.mark.parametrize("raw", [
     "10.5555/KV.Own.0001", "doi:10.5555/kv.own.0001", "DOI: 10.5555/kv.own.0001", "https://doi.org/10.5555/kv.own.0001",
     "http://dx.doi.org/10.5555/kv.own.0001", " 10.5555/kv.own.0001. ", "10.5555/kv.own.0001);", "10.5555/kv.own.0001”",
+    "10.5555/kv.own.0001‚", "10.5555/kv.own.0001„", "10.5555/kv.own.0001“", "10.5555/kv.own.0001‘", "10.5555/kv.own.0001…",
+    "10.5555/kv.own.0001»", "10.5555/kv.own.0001‚”",
 ])
 def test_normalise_doi_reaches_one_spelling(raw):
     assert doimod.normalise_doi(raw) == "10.5555/kv.own.0001"

@@ -43,7 +43,7 @@ COMMAND_KINDS: dict[str, str] = {
     "collection create": CATALOG, "collection add": CATALOG, "collection remove": CATALOG, "collection list": READ, "collection show": READ,
     "collection delete": CATALOG, "tag add": CATALOG, "tag remove": CATALOG, "tag list": READ,
     "saved list": READ, "saved run": READ, "saved delete": CATALOG, "view": READ,
-    "capabilities": READ, "locate": READ, "open": READ, "mcp": READ,
+    "capabilities": READ, "locate": READ, "open": READ, "mcp": READ, "gui": CATALOG,
     "root allow-organize": CATALOG, "plan create": CATALOG, "plan show": READ, "apply": FILESYSTEM, "undo": FILESYSTEM, "recover": FILESYSTEM, "history": READ,
 }
 #: Options that turn an otherwise read-only command into a writing one. Listed so a caller does not have to trust the kind alone.

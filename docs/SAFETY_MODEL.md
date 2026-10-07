@@ -23,6 +23,19 @@ What each kind of operation is allowed to touch. A command's category is part of
 - PDF metadata, filenames and provider responses are text, never markup, and never shell input. External tools are
   invoked with argument arrays, never `shell=True`.
 - Paths taken from commands or from the MCP must resolve inside an explicitly configured root.
+- In the library window, outside text (a title, a path, a tag, evidence read from a PDF) is shown as text and nothing else: labels are
+  created plain, tooltips built from it are escaped, messages are plain, and `gui/text.audit()` checks a live window for anything
+  that could render it as HTML (an `<img src="http://...">` in a title would otherwise be a request to a stranger's server). A test
+  runs the audit over every tab, and the scripted tour ends with it. See [GUI.md](GUI.md).
+
+## The window
+
+`kv gui` adds no new power. Everything it can do is a service the commands already call, with the same actors and history, and it
+never moves, renames or deletes a file, never applies a plan (a rename is *proposed* and *saved*; `kv apply` is the only mover), never
+sends anything over the network, and never accepts a proposal unless a person pressed Accept (or confirmed the batch rule). A folder is
+added with organizing OFF. Its long work runs on a write lane of ONE thread (the catalog's one logical writer) and can be stopped
+between files; its reads are read-only snapshots. The scripted run (`KNOWLEDGEVISTA_DRIVE`) refuses to drive the real library unless
+told, before it creates anything.
 
 ## Storage classes
 

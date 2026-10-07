@@ -406,6 +406,7 @@ def resolve_library(
     root_ids: list[str] | None = None,
     limit: int | None = None,
     progress: Callable[[str], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Run the stages over the library's PDFs and return a report. See the module docstring for what each stage may do."""
     if online and provider is None:
@@ -414,7 +415,7 @@ def resolve_library(
     started = time.perf_counter()
     report: dict[str, Any] = {
         "run_id": new_id(), "documents": 0, "not_extracted": 0, "local": {}, "front": {}, "doi_classes": {}, "accepted": {"total": 0},
-        "skipped_by_rule": [], "problems": [], "notes": [],
+        "skipped_by_rule": [], "problems": [], "notes": [], "stopped": False,
         "online": {"enabled": online, "requests": 0, "cache_hits": 0, "states": {}, "verdicts": {}, "stopped": None},
     }
     run_id = report["run_id"]
@@ -431,6 +432,9 @@ def resolve_library(
         shared = _library_shared_dois(catalog, index)
         report["shared_dois"] = shared
         for number, doc in enumerate(documents, start=1):
+            if should_stop is not None and should_stop():
+                report["stopped"] = True  # between documents: each is proposed for whole or not at all
+                break
             if number == 1 or number % 50 == 0:
                 say(f"resolving {number}/{len(documents)}")
             report["documents"] += 1
@@ -465,7 +469,7 @@ def resolve_library(
                 _online_metadata_stage(catalog, doc, state, run_id, report, text, works)
                 if accept_safe:
                     _tally(report, review.accept_safe_for_document(catalog, doc.document_id))
-        status = "completed"
+        status = "interrupted" if report["stopped"] else "completed"
     finally:
         if state is not None:
             report["online"]["stopped"] = state.stop

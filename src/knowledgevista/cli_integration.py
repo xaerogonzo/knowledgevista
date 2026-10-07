@@ -8,17 +8,13 @@ Model Context Protocol tools on stdin/stdout.
 from __future__ import annotations
 
 import argparse
-import os
-import subprocess
-import sys
 from collections.abc import Callable
 
 from knowledgevista.cli_support import Outcome, catalog_path
 from knowledgevista.db.catalog import open_catalog
-from knowledgevista.domain import reference as refmod
-from knowledgevista.errors import ErrorCode, KvError
 from knowledgevista.services import capabilities as capabilities_service
 from knowledgevista.services import locate as locate_service
+from knowledgevista.services import opener
 
 
 def cmd_capabilities(args: argparse.Namespace) -> Outcome:
@@ -55,42 +51,20 @@ def cmd_locate(args: argparse.Namespace) -> Outcome:
     return out
 
 
-def _launch(path: str) -> None:
-    """Hand a file to the operating system's default program. Separate so tests can replace it."""
-    if sys.platform.startswith("win"):
-        os.startfile(path)  # type: ignore[attr-defined]  # noqa: S606 - the point of the command
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", path])  # noqa: S603,S607
-    else:
-        subprocess.Popen(["xdg-open", path])  # noqa: S603,S607
+#: Kept under its old name: tests (and anything wrapping `kv open`) replace this one function to stop a viewer from starting.
+_launch = opener.launch
 
 
 def cmd_open(args: argparse.Namespace, launch: Callable[[str], None] | None = None) -> Outcome:
-    if args.pdf_page is not None and args.label is not None:
-        raise KvError(ErrorCode.INVALID_ARGUMENTS, "Give --pdf-page (physical position) or --label (printed label), not both.")
-    if args.pdf_page is not None and not 1 <= args.pdf_page <= refmod.MAX_PAGE:
-        raise KvError(ErrorCode.INVALID_ARGUMENTS, f"--pdf-page must be between 1 and {refmod.MAX_PAGE}.")
+    opener.check_page(args.pdf_page, args.label)
     conn = open_catalog(catalog_path(args), create=False, read_only=True)
     try:
-        found = locate_service.locate(conn, args.reference)
+        record = opener.open_document(conn, args.reference, pdf_page=args.pdf_page, label=args.label, do_launch=not args.no_launch, launcher=launch or _launch)
     finally:
         conn.close()
-    here = [loc for loc in found["locations"] if loc["state"] == "active" and loc["root_status"] == "online" and loc["on_disk"] is not False]
-    if not here:
-        code = ErrorCode.ROOT_UNAVAILABLE if found["status"] == "root_offline" else ErrorCode.FILE_MISSING
-        raise KvError(code, f"There is no reachable copy of this document to open right now ({found['status']}).", {"locate": found})
-    path = here[0]["absolute_path"]
-    page = {"pdf_page": args.pdf_page, "printed_label": args.label} if (args.pdf_page is not None or args.label is not None) else found.get("page")
-    launched = False
-    if not args.no_launch:
-        (launch or _launch)(path)
-        launched = True
-    record = {"type": "open", "document_id": found["document_id"], "artifact_id": found["artifact_id"], "path": path, "launched": launched,
-              "requested_page": page, "page_targeted": False,
-              "note": "The file was handed to the operating system's default program, which does not take a page from us. Go to the page named in requested_page; "
-                      "the built-in reader (a later milestone) will open at it."}
+    page = record["requested_page"]
     where = f"  (page {page['pdf_page'] or page['printed_label']} is not targeted by an external viewer)" if page else ""
-    return Outcome([record], lines=[f"{'opened' if launched else 'would open'} {path}{where}"])
+    return Outcome([record], lines=[f"{'opened' if record['launched'] else 'would open'} {record['path']}{where}"])
 
 
 def cmd_mcp(args: argparse.Namespace) -> Outcome:

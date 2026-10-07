@@ -52,6 +52,7 @@ class ExtractReport:
     unreachable: int = 0
     changed_since_scan: int = 0
     other_kinds_not_extracted: int = 0
+    stopped: bool = False  # a caller asked to stop; what was done is stored, the rest is untouched
     seconds: float = 0.0
     limiter: str | None = None
     problems: list[dict[str, Any]] = field(default_factory=list)
@@ -111,6 +112,7 @@ def extract_library(
     limit: int | None = None,
     session: ExtractionSession | None = None,
     progress: Callable[[str], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> ExtractReport:
     profile = current_profile()
     report = ExtractReport(profile=profile.as_dict())
@@ -151,6 +153,9 @@ def extract_library(
     durations: list[float] = []
     try:
         for number, (artifact_id, path, size, mtime_ns, stale) in enumerate(targets, start=1):
+            if should_stop is not None and should_stop():
+                report.stopped = True  # checked between files: one file is stored whole or not at all
+                break
             if number == 1 or number % 25 == 0:
                 say(f"extracting {number}/{len(targets)}")
             if not _stat_matches(path, size, mtime_ns):
