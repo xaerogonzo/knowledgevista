@@ -1,6 +1,7 @@
 # Knowledge Vista
 
-> **Status: pre-alpha (milestone 0).** The foundations are being laid. There is no usable library manager yet.
+> **Status: pre-alpha (milestone 1).** It can scan folders and track files by content hash (survives renames, moves and re-downloads),
+> report what it knows, and check itself. There is no search, metadata or reader yet; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Point it at your mess of PDFs. Search them by what they contain. Find out what each one actually is. Nothing is moved,
 renamed or deleted unless you review a plan and approve it.
@@ -29,6 +30,19 @@ first, and reversible.
 
 See [docs/INVARIANTS.md](docs/INVARIANTS.md), [docs/SAFETY_MODEL.md](docs/SAFETY_MODEL.md) and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Try it (milestone 1)
+
+```bash
+uv run kv root add "D:/path/to/your/papers" --label papers
+uv run kv scan                 # hashes new/changed files; reads nothing it does not have to
+uv run kv stats                # inventory, and health kept separate
+uv run kv explain kaya2022.pdf # what is it, where is it, what happened to it
+uv run kv doctor               # structural check, read-only
+uv run kv verify               # re-reads every file and checks its bytes (slow)
+```
+
+Add `--json` for machine output (see [docs/CLI_CONTRACT.md](docs/CLI_CONTRACT.md)). Nothing here writes to your folders.
 
 ## Develop
 

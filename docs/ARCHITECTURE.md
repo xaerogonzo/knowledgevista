@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **design baseline (milestone 0).** This is what is being built, in the order it will be built. Sections marked
+Status: **design baseline; milestones 0 and 1 are implemented** (the identity substrate: roots, locations, artifacts, documents, the scan reconciliation, `kv scan/stats/explain/doctor/verify`). This is what is being built, in the order it will be built. Sections marked
 as milestones are not implemented yet; [INVARIANTS.md](INVARIANTS.md) is what every part must satisfy and
 [SAFETY_MODEL.md](SAFETY_MODEL.md) is what each operation may touch.
 
@@ -50,8 +50,8 @@ Library
 | Entity | Meaning and rules |
 |---|---|
 | **root** | `root_id`, configured path, label, enabled, `status` (`online / unavailable / permission_denied / moved_candidate`), optional volume id, `allow_organize` (default false). The organizer refuses a root without it, even if the OS would allow writes. A configured UNC root is legitimate; the rule is "paths stay inside an explicitly configured root; `..`, reparse-point and alternate-data-stream escapes are rejected". |
-| **location** | One observed path: `root_id + relative_path`, `first_seen`, `last_seen`, `state` (`active / missing / inaccessible`), `raw display path` and a separate normalised comparison key (Windows case semantics explicit; `\\?\` extended-length paths accepted and normalised internally). Location history is retained and never purged by default. |
-| **artifact** | Immutable bytes, `artifact_id = sha256`, size, `state` (`stable / changing / unreadable`). Availability is *derived*: an artifact is available iff some active, accessible location exists. Not a stored flag. |
+| **location** | One observed path: `root_id + relative_path`, `first_seen`, `last_seen`, `state` (`active / missing / inaccessible`), `size` and `mtime_ns` (the stat taken just BEFORE the read: a freshness hint, never proof), `ended_at` / `end_reason` (`replaced` / `moved`) / `successor_location_id`, `raw display path` and a separate normalised comparison key (Windows case semantics explicit; `\\?\` extended-length paths accepted and normalised internally). Location history is retained and never purged by default. |
+| **artifact** | Immutable bytes, `artifact_id = sha256`, size, `content_kind` (what the first bytes show). **There is no stored artifact state** (a deviation from the first plan, made in milestone 1): bytes that could not be read or that changed mid-read have no hash and so no artifact. That is a property of the *observation*: a location whose state is `inaccessible`, or a scan report's `changing` count. Availability is *derived*: an artifact is available iff some active location exists under an online root. An artifact belongs to exactly one document. |
 | **document** | A stable opaque UUID: *a user-addressable logical library item*. It is not a bibliographic work and not a hash. Linked to artifacts through `document_artifact(role: primary / ocr_derivative / alternate_copy, canonical, canonical_reason)`. Replaced bytes make a new artifact that does **not** inherit metadata; joining it to the old document is a proposal. A document can be split or merged by an explicit audited action; artifact IDs are unaffected. |
 | **artifact_relation** | Byte-level: `duplicate_of`, `derivative_of`, `replaces`, `equivalent_to`. |
 | **document_relation** | Logical: `supplement_of`, `part_of` (chapter order lives here), `version_of`, `related_to`. A chapter is its own document, `part_of` its book. |
