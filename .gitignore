@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.hypothesis/
+*.egg-info/
+build/
+dist/
+
+# Code-graph indexes (local tooling, per checkout)
+.tokensave/
+.codegraph/
+
+# Local KV data: a catalog is a user's reading list, caches are rebuildable.
+# None of this belongs in a public repository, ever (tools/check_repo_safe.py enforces it).
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.db
+*.kv-backup
+.kv/
+kv-cache/
+kv-private/
+
+# A corpus is never committed. Tiny generated fixtures live under tests/ and are built in code.
+*.pdf
+!tests/fixtures/static/*.pdf
+
+# Local config, logs, scratch
+.env
+*.log
+scratch/
