@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    # The first target platform is Windows; Linux is added once the Windows filesystem matrix has Linux counterparts.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install (all extras and the dev group)
+        run: uv sync --all-extras --group dev
+      - name: Tests
+        run: uv run python -m pytest -q
+      - name: Nothing a public repository must not carry
+        run: uv run python tools/check_repo_safe.py
+      - name: Licences of the default (core) install
+        run: uv run python tools/license_inventory.py
+      - name: Licences of the extract and gui extras
+        run: uv run python tools/license_inventory.py --extras extract,gui
+
+  core-only-build:
+    # The core must install and run without any optional group (no PyMuPDF, no PySide6, no network stack).
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install the core only
+        run: uv sync --no-dev
+      - name: Entry point works with no extras installed
+        run: uv run kv --version

@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "knowledgevista"
+version = "0.0.1"
+description = "A local-first library manager, search index and reader for messy document folders."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Alex" }]
+# The core is the standard library plus SQLite on purpose (docs/ARCHITECTURE.md): everything else is an
+# optional group, so a user who never wants the network or a GUI never installs either.
+dependencies = []
+
+[project.optional-dependencies]
+# PDF parsing. PyMuPDF is AGPL-3.0 (or commercial), which is why this project is AGPL-3.0-or-later.
+extract = ["pymupdf>=1.26"]
+network = []
+mcp = []
+gui = ["PySide6>=6.6"]
+# Deliberately EMPTY and not wired to pymupdf4llm: that package requires pymupdf_layout, which is licensed
+# Polyform Noncommercial. See docs/ARCHITECTURE.md ("Licensing") before putting anything here.
+reflow = []
+ocr = []
+
+[project.scripts]
+kv = "knowledgevista.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pymupdf>=1.26"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/knowledgevista"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
