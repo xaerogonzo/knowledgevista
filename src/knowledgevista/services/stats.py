@@ -9,9 +9,10 @@ import sqlite3
 from collections import Counter
 
 from knowledgevista.domain.kinds import extension_kind, extension_of, kinds_disagree
+from knowledgevista.services.search import coverage
 
 
-def library_stats(conn: sqlite3.Connection) -> dict:
+def library_stats(conn: sqlite3.Connection, index: sqlite3.Connection | None = None) -> dict:
     scalar = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731 - a one-line local helper
     by_state = {r["state"]: r["n"] for r in conn.execute(
         "SELECT state, COUNT(*) AS n FROM location WHERE ended_at IS NULL GROUP BY state")}
@@ -57,4 +58,5 @@ def library_stats(conn: sqlite3.Connection) -> dict:
             "interrupted_scans": scalar("SELECT COUNT(*) FROM scan_run WHERE status = 'interrupted'"),
             "catalog_revision": scalar("SELECT catalog_revision FROM library"),
         },
+        "search": coverage(conn, index),
     }

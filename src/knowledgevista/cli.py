@@ -19,7 +19,14 @@ from knowledgevista.db.catalog import open_catalog
 from knowledgevista.db.migrations import SchemaTooNew
 from knowledgevista.envelope import Envelope
 from knowledgevista.errors import EXIT_FAILURE, EXIT_INVALID, EXIT_OK, ErrorCode, KvError
+from knowledgevista.extract.client import ExtractionSession
+from knowledgevista.index.importer import import_openchem_index
+from knowledgevista.index.search import parse_query
+from knowledgevista.index.store import open_index
 from knowledgevista.services import doctor as doctor_service
+from knowledgevista.services import extract as extract_service
+from knowledgevista.services import pages as pages_service
+from knowledgevista.services import search as search_service
 from knowledgevista.services import explain as explain_service
 from knowledgevista.services import resolve as resolve_service
 from knowledgevista.services import roots as roots_service
@@ -34,6 +41,7 @@ class Outcome:
     warnings: list[dict[str, Any]] = field(default_factory=list)
     errors: list[dict[str, Any]] = field(default_factory=list)
     lines: list[str] = field(default_factory=list)  # the human rendering
+    complete: bool = True  # False when the records are a truncated view of a larger result
 
     @property
     def ok(self) -> bool:
@@ -60,6 +68,11 @@ def _say(message: str) -> None:
 
 def _catalog_path(args: argparse.Namespace) -> Path:
     return Path(args.catalog) if getattr(args, "catalog", None) else paths.catalog_path()
+
+
+def _index(args: argparse.Namespace, *, create: bool, read_only: bool = False):
+    """The extraction store beside this catalog, or None if there is none (or it is from another schema version)."""
+    return open_index(paths.index_path(_catalog_path(args)), create=create, read_only=read_only)
 
 
 def cmd_root_add(args: argparse.Namespace) -> Outcome:
@@ -114,10 +127,13 @@ def cmd_scan(args: argparse.Namespace) -> Outcome:
 
 def cmd_stats(args: argparse.Namespace) -> Outcome:
     conn = open_catalog(_catalog_path(args), create=False, read_only=True)
+    index = _index(args, create=False, read_only=True)
     try:
-        stats = stats_service.library_stats(conn)
+        stats = stats_service.library_stats(conn, index)
     finally:
         conn.close()
+        if index is not None:
+            index.close()
     inv, health = stats["inventory"], stats["health"]
     lines = [
         f"Inventory: {inv['documents']} documents, {inv['artifacts']} artifacts, {inv['locations_current']} current files "
@@ -125,6 +141,9 @@ def cmd_stats(args: argparse.Namespace) -> Outcome:
         "  by type: " + ", ".join(f"{k} {v}" for k, v in inv["by_extension_kind"].items()),
         f"Health: {health['locations_missing']} missing, {health['locations_inaccessible']} inaccessible, "
         f"{health['exact_duplicate_groups']} exact-duplicate group(s), {health['extension_content_mismatches']} name/content mismatch(es)",
+        f"Search: {stats['search']['searchable']} of {stats['search']['pdf_documents']} PDFs searchable "
+        f"({stats['search']['not_yet_extracted']} not extracted yet, {stats['search']['no_text_layer']} scans with no text layer, "
+        f"{stats['search']['partially_indexed']} partial, {stats['search']['extraction_failed']} failed)",
     ]
     return Outcome([stats], lines=lines)
 
@@ -153,10 +172,13 @@ def cmd_explain(args: argparse.Namespace) -> Outcome:
 
 def cmd_doctor(args: argparse.Namespace) -> Outcome:
     conn = open_catalog(_catalog_path(args), create=False, read_only=True)
+    index = _index(args, create=False, read_only=True)
     try:
-        findings = doctor_service.run_doctor(conn)
+        findings = doctor_service.run_doctor(conn, index)
     finally:
         conn.close()
+        if index is not None:
+            index.close()
     errors = sum(f.severity == "error" for f in findings)
     warns = sum(f.severity == "warning" for f in findings)
     out = Outcome([{"type": "summary", "categories_checked": doctor_service.CHECKED_CATEGORIES, "errors": errors, "warnings": warns},
@@ -190,6 +212,123 @@ def cmd_verify(args: argparse.Namespace) -> Outcome:
                                   {"paths": report.missing[:50]}).as_dict())
     out.warnings += [{"code": "KV_ROOT_SKIPPED", "message": f"{s['root']} was not verified ({s['status']})."} for s in report.skipped_roots]
     return out
+
+
+def cmd_extract(args: argparse.Namespace) -> Outcome:
+    conn = open_catalog(_catalog_path(args), create=False)
+    index = _index(args, create=True)
+    out = Outcome()
+    try:
+        selected = [r.root_id for r in roots_service.find_roots(conn, args.root)] if args.root else None
+        session = ExtractionSession(memory_limit_mb=args.memory_limit_mb, page_timeout=args.page_timeout)
+        with session:
+            report = extract_service.extract_library(
+                conn, index, root_ids=selected, force=args.force, retry_failed=args.retry_failed,
+                rebuild_imported=args.rebuild_imported, limit=args.limit, session=session, progress=_say,
+            )
+    finally:
+        conn.close()
+        index.close()
+    out.records.append({"type": "summary", **report.as_dict()})
+    out.lines.append(
+        f"{report.extracted} extracted ({report.complete} complete, {report.partial} partial, {report.failed} failed; "
+        f"{report.pages} pages) of {report.candidates} PDFs in {report.seconds:.1f}s; {report.current} already current, "
+        f"{report.provisional_imported} provisional imports kept, {report.unreachable} unreachable, "
+        f"{report.changed_since_scan} changed since scan, {report.stale_redone} stale redone"
+    )
+    out.lines += [f"  {p['artifact_id'][:12]}: {p['message']}" for p in report.problems]
+    if report.limiter and "NOT ENFORCED" in report.limiter:
+        out.warnings.append({"code": "KV_MEMORY_LIMIT_NOT_ENFORCED", "message": report.limiter})
+    if report.changed_since_scan:
+        out.warnings.append({"code": "KV_CHANGED_SINCE_SCAN",
+                             "message": f"{report.changed_since_scan} file(s) changed since the last scan and were skipped. Run: kv scan"})
+    if report.other_kinds_not_extracted:
+        out.warnings.append({"code": "KV_NON_PDF_NOT_EXTRACTED",
+                             "message": f"{report.other_kinds_not_extracted} non-PDF artifact(s) are not extracted in this version."})
+    if report.extracted and report.failed == report.extracted:
+        out.errors.append(KvError(ErrorCode.EXTRACTION_FAILED, "Every document that was tried failed to extract.",
+                                  {"failed": report.failed}).as_dict())
+    return out
+
+
+def cmd_search(args: argparse.Namespace) -> Outcome:
+    query = parse_query(args.query, near=args.near, within=args.within, also=args.also, path_contains=args.file)
+    conn = open_catalog(_catalog_path(args), create=False, read_only=True)
+    index = _index(args, create=False, read_only=True)
+    try:
+        result = search_service.search(conn, index, query, limit=args.limit)
+    finally:
+        conn.close()
+        if index is not None:
+            index.close()
+    cov = result.coverage
+    out = Outcome(complete=not result.truncated)
+    out.records.append({
+        "type": "summary",
+        "query": {"alternatives": list(query.alternatives), "near": list(query.near), "within": query.within,
+                  "also": list(query.also), "path_contains": query.path_contains, "language_version": query.language_version},
+        "hits": len(result.hits), "truncated": result.truncated, "coverage": cov,
+    })
+    out.records += [{"type": "hit", **hit} for hit in result.hits]
+    if cov["searchable"] == 0:
+        out.errors.append(KvError(ErrorCode.NOTHING_SEARCHABLE,
+                                  "No document has extracted text, so this search could not have found anything. Run: kv extract",
+                                  {"coverage": cov}).as_dict())
+    else:
+        caveats = [f"{cov[key]} {label}" for key, label in (
+            ("not_yet_extracted", "PDF(s) not extracted yet"), ("no_text_layer", "scan(s) with no text layer"),
+            ("partially_indexed", "partially indexed"), ("extraction_failed", "failed extraction(s)")) if cov[key]]
+        if caveats:
+            out.warnings.append({"code": "KV_SEARCH_COVERAGE", "details": cov,
+                                 "message": "Not everything was searchable: " + ", ".join(caveats) + ". A missing hit is not proof of absence."})
+    for hit in result.hits:
+        where = hit["paths"][0]["path"] if hit["paths"] else hit["artifact_id"][:12]
+        label = f" [{hit['printed_label']}]" if hit["printed_label"] else ""
+        provisional = "  (provisional)" if hit["extraction"]["provisional"] else ""
+        out.lines.append(f"{where}  p{hit['pdf_page']}{label}{provisional}\n    {' '.join(hit['snippet'].split())}")
+    out.lines.append(f"{len(result.hits)} page(s)" + (f" (limit {args.limit}; more exist)" if result.truncated else ""))
+    out.lines += [f"  note: {w['message']}" for w in out.warnings]
+    return out
+
+
+def cmd_show(args: argparse.Namespace) -> Outcome:
+    conn = open_catalog(_catalog_path(args), create=False, read_only=True)
+    index = _index(args, create=False, read_only=True)
+    try:
+        page = pages_service.get_page(conn, index, args.reference, pdf_page=args.pdf_page, label=args.label)
+    finally:
+        conn.close()
+        if index is not None:
+            index.close()
+    shown = f"pdf page {page['pdf_page']} of {page['page_count']}"
+    if page["printed_label"]:
+        shown += f" (printed label {page['printed_label']})"
+    out = Outcome([page])
+    out.lines = [f"{shown}  [{page['text_state']}]", page["text"] or "(no extracted text on this page)", "", f"-- {page['note']}"]
+    if page["extraction"]["provisional"]:
+        out.warnings.append({"code": "KVD_PROVISIONAL_TEXT",
+                             "message": "This text was imported from the OpenChem index and has no page labels."})
+    return out
+
+
+def cmd_import_index(args: argparse.Namespace) -> Outcome:
+    conn = open_catalog(_catalog_path(args), create=False)
+    index = _index(args, create=True)
+    try:
+        report = import_openchem_index(conn, index, args.path, progress=_say)
+    finally:
+        conn.close()
+        index.close()
+    out = Outcome([{"type": "summary", **report.as_dict()}])
+    out.lines = [f"Imported {report.imported} document(s), {report.pages} pages, from {report.legacy_files} legacy row(s). "
+                 f"Unmatched (hash not in the catalog): {report.unmatched}; kept native: {report.skipped_native_exists}; "
+                 f"already imported: {report.skipped_already_imported}; duplicate hash: {report.skipped_duplicate_hash}."]
+    if report.unmatched:
+        out.warnings.append({"code": "KV_IMPORT_UNMATCHED", "details": {"examples": report.unmatched_examples},
+                             "message": f"{report.unmatched} legacy row(s) match no artifact (not scanned yet, or the file changed). "
+                                        "Run kv scan, then import again."})
+    return out
+
 
 
 # --- parser and entry point -------------------------------------------------------------------------------------
@@ -228,6 +367,37 @@ def build_parser(json_mode: bool = False) -> _Parser:
     verify = sub.add_parser("verify", parents=[shared], help="re-read every file and check its bytes (slow, read-only)")
     verify.add_argument("--root")
     verify.set_defaults(handler=cmd_verify)
+    extract = sub.add_parser("extract", parents=[shared], help="read the text of PDFs into the search index (needs the extract group)")
+    extract.add_argument("--root")
+    extract.add_argument("--force", action="store_true", help="re-extract everything")
+    extract.add_argument("--retry-failed", action="store_true", help="try again the documents that failed or were partial")
+    extract.add_argument("--rebuild-imported", action="store_true",
+                         help="replace text imported from the OpenChem index with native extraction")
+    extract.add_argument("--limit", type=int, help="stop after this many documents")
+    extract.add_argument("--memory-limit-mb", type=int, default=2048, help="memory cap for the extraction worker (default 2048)")
+    extract.add_argument("--page-timeout", type=float, default=60.0, help="seconds one page may take before the worker is replaced")
+    extract.set_defaults(handler=cmd_extract)
+    search = sub.add_parser("search", parents=[shared], help="find pages by their words")
+    search.add_argument("query", help="a phrase; `a | b` for alternatives; a trailing * is a prefix")
+    search.add_argument("--near", action="append", default=[], help="also within --within words of it (repeatable)")
+    search.add_argument("--within", type=int, default=30)
+    search.add_argument("--also", action="append", default=[], help="also somewhere on the same page (repeatable)")
+    search.add_argument("--file", help="only files whose path contains this")
+    search.add_argument("--limit", type=int, default=20)
+    search.set_defaults(handler=cmd_search)
+    show = sub.add_parser("show", parents=[shared], help="print one extracted page")
+    show.add_argument("reference", help="a document id, sha256 or path/file name")
+    which = show.add_mutually_exclusive_group(required=True)
+    which.add_argument("--pdf-page", type=int, help="the physical position in the PDF, counted from 1")
+    which.add_argument("--label", help="the page number as PRINTED on the page (a string: iii, A-1, 164)")
+    show.set_defaults(handler=cmd_show)
+    imp = sub.add_parser("import", parents=[shared], help="import data from another tool")
+    imp_sub = imp.add_subparsers(dest="import_command", metavar="source", required=True,
+                                 parser_class=lambda **kw: _Sub(json_mode, **kw))
+    oc = imp_sub.add_parser("openchem-index", parents=[shared],
+                            help="use a '<library>.index.sqlite' from OpenChem as provisional search text")
+    oc.add_argument("path")
+    oc.set_defaults(handler=cmd_import_index)
     return parser
 
 
@@ -259,7 +429,9 @@ def main(argv: list[str] | None = None) -> int:
         handler: Callable[[argparse.Namespace], Outcome] | None = getattr(args, "handler", None)
         if handler is None:
             raise KvError(ErrorCode.INVALID_ARGUMENTS, "No command given. Try: kv --help")
-        command = args.command if args.command != "root" else f"root {args.root_command}"
+        command = args.command
+        if command in ("root", "import"):
+            command = f"{command} {getattr(args, command + '_command')}"
         outcome = handler(args)
     except KvError as exc:
         _emit(Envelope(command, ok=False, errors=[exc.as_dict()]), json_mode, [])
@@ -272,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
         error = KvError(ErrorCode.INTERNAL, f"{type(exc).__name__}: {exc}")
         _emit(Envelope(command, ok=False, errors=[error.as_dict()]), json_mode, [])
         return EXIT_FAILURE
-    envelope = Envelope(command, ok=outcome.ok, records=outcome.records, warnings=outcome.warnings, errors=outcome.errors)
+    envelope = Envelope(command, ok=outcome.ok, records=outcome.records, warnings=outcome.warnings, errors=outcome.errors, complete=outcome.complete)
     _emit(envelope, json_mode, outcome.lines)
     if outcome.ok:
         return EXIT_OK

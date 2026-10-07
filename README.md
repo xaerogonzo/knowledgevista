@@ -1,7 +1,8 @@
 # Knowledge Vista
 
-> **Status: pre-alpha (milestone 1).** It can scan folders and track files by content hash (survives renames, moves and re-downloads),
-> report what it knows, and check itself. There is no search, metadata or reader yet; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+> **Status: pre-alpha (milestone 2).** It scans folders and tracks files by content hash (surviving renames, moves and re-downloads),
+> reads PDF text safely, and searches it, saying what it could not search. No metadata (titles, authors), organiser or reader yet; see
+> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Point it at your mess of PDFs. Search them by what they contain. Find out what each one actually is. Nothing is moved,
 renamed or deleted unless you review a plan and approve it.
@@ -31,18 +32,25 @@ first, and reversible.
 See [docs/INVARIANTS.md](docs/INVARIANTS.md), [docs/SAFETY_MODEL.md](docs/SAFETY_MODEL.md) and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Try it (milestone 1)
+## Try it (milestones 1 and 2)
 
 ```bash
+uv sync --extra extract        # PyMuPDF, needed only to read PDF text
 uv run kv root add "D:/path/to/your/papers" --label papers
 uv run kv scan                 # hashes new/changed files; reads nothing it does not have to
 uv run kv stats                # inventory, and health kept separate
 uv run kv explain kaya2022.pdf # what is it, where is it, what happened to it
 uv run kv doctor               # structural check, read-only
 uv run kv verify               # re-reads every file and checks its bytes (slow)
+uv run kv extract              # reads PDF text in a memory-capped, killable worker process
+uv run kv search "aqueous solubility"       # pages, with a statement of what could NOT be searched
+uv run kv search "solub*" --near compound   # explicit prefix; words within 30 of each other
+uv run kv show kaya2022.pdf --pdf-page 12   # or --label 164: physical position vs printed page number
+uv run kv import openchem-index "D:/path/Sci Downloads.index.sqlite"   # reuse an OpenChem index as provisional text
 ```
 
-Add `--json` for machine output (see [docs/CLI_CONTRACT.md](docs/CLI_CONTRACT.md)). Nothing here writes to your folders.
+Add `--json` for machine output (see [docs/CLI_CONTRACT.md](docs/CLI_CONTRACT.md)); [docs/SEARCH.md](docs/SEARCH.md) says
+exactly what search does and does not do. Nothing here writes to your folders.
 
 ## Develop
 

@@ -57,3 +57,14 @@ def config_dir() -> Path:
 
 def catalog_path() -> Path:
     return data_dir() / "catalog.sqlite"
+
+
+def index_path(catalog: Path | str | None = None) -> Path:
+    """The extraction store (cache). Beside an explicit catalog as `<name>.cache/extractions.sqlite`, else in the
+    cache directory. Deriving it from the catalog keeps a test catalog, a portable catalog and its cache together."""
+    if catalog is None:
+        return cache_dir() / "extractions.sqlite"
+    target = Path(catalog)
+    if target == catalog_path():
+        return cache_dir() / "extractions.sqlite"
+    return target.with_name(target.stem + ".cache") / "extractions.sqlite"

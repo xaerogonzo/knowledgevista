@@ -285,7 +285,7 @@ def test_doctor_is_clean_on_a_healthy_catalog_and_names_what_it_checked(tmp_path
     env = make_env(tmp_path, {"a.txt": "x"})
     env.scan()
     assert doctor.run_doctor(env.conn) == []
-    assert doctor.CHECKED_CATEGORIES == ["filesystem", "catalog"]
+    assert doctor.CHECKED_CATEGORIES == ["filesystem", "catalog", "extraction", "search"]
 
 
 def test_doctor_reports_each_injected_defect_by_its_own_code(tmp_path):

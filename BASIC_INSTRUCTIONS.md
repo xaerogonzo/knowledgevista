@@ -15,7 +15,7 @@
 
 ## Project Structure
 
-- `src/knowledgevista/` — the package (src layout). `paths.py` is the only module that decides where app data lives; `db/` holds connections and forward-only SQL migrations (`db/schema/NNNN_name.sql`); `cli.py` is a thin adapter over `services/` (scan, roots, resolve, explain, stats, doctor, verify); `domain/` is pure (ids, path keys, kind detection); `errors.py` and `envelope.py` are the machine contract. Extraction, metadata, MCP and GUI arrive with later milestones (see `docs/ARCHITECTURE.md`).
+- `src/knowledgevista/` — the package (src layout). `paths.py` is the only module that decides where app data lives; `db/` holds connections and forward-only SQL migrations (`db/schema/NNNN_name.sql`); `cli.py` is a thin adapter over `services/` (scan, roots, resolve, explain, stats, doctor, verify, extract, search, pages); `domain/` is pure (ids, path keys, kind detection, text logic); `extract/` is the PDF worker process, its supervisor and the memory-limit mechanism; `index/` is the rebuildable extraction store (a cache SQLite file, never the catalog), the search query and the OpenChem-index importer; `errors.py` and `envelope.py` are the machine contract. Metadata, relations, MCP, the organizer and the GUI arrive with later milestones (see `docs/ARCHITECTURE.md`).
 - `tests/` — pytest suite. `pdfbuilders.py` generates every PDF fixture in code from synthetic text; `test_pdfbuilders.py` proves each fixture is what its name claims.
 - `tools/` — `check_repo_safe.py` (nothing a public repo must not carry) and `license_inventory.py` (licences over the lockfile's transitive closure). Both run in CI and are themselves tested.
 - `docs/` — architecture and policy documents; `docs/gotchas/` is delivered by TokenSave Manager and is not edited here.
@@ -53,6 +53,8 @@ Object model: Library > Root > Location > Artifact (sha256) > Extraction > Page;
 
 - `src/knowledgevista/db/migrations.py` — the migration policy (forward only, atomic per step, backup via the SQLite backup API, newer schema refused). Read its docstring before touching the schema.
 - `src/knowledgevista/db/connection.py` — how every connection is opened (foreign keys ON, WAL, busy timeout).
+- `src/knowledgevista/extract/client.py` — the supervisor: `ExtractionSession.extract(path)` ALWAYS returns (a hang, crash, memory kill or garbage becomes a failed page, and extraction resumes at the next page). Its docstring is the failure policy. `tests/fakeworker.py` is a scriptable real process used to test it.
+- `docs/SEARCH.md` — what search means (quoting, prefix, no stemming or transliteration, coverage). Changing search semantics means changing this file and its query-set tests together.
 - `src/knowledgevista/services/scan.py` — the reconciliation algorithm (its docstring is the spec: probe, walk, fast path, hash, replace/move, absence). Read it before changing scan behaviour.
 - `src/knowledgevista/db/schema/0002_identity.sql` — the identity schema; its constraints (one current location per path, one document per artifact, no active location without an artifact) are tested.
 - `tests/support.py` — `make_env` builds a library on disk with a catalog; `Env.snapshot()` compares catalogs without random IDs.
@@ -71,5 +73,7 @@ Object model: Library > Root > Location > Artifact (sha256) > Extraction > Page;
 - **License discipline.** The default install must contain no noncommercial or unknown-licence dependency. `pymupdf4llm` requires `pymupdf_layout` (Polyform Noncommercial): the `reflow` extra stays empty until that is resolved. Run `uv run python tools/license_inventory.py --extras extract` after any dependency change.
 - **Identity follows the bytes; absence is never deletion.** A scan never deletes a location, artifact or document: a vanished file is `missing`, an unlistable directory is `inaccessible`, an unavailable root changes only its status, and ended locations stay as history. `size + mtime` is a freshness hint only; `kv verify` and `scan --full` read the bytes.
 - **Mutation-test scanner changes.** `tests/test_scan.py` is the acceptance suite; after changing `services/scan.py`, plant faults (drop the move pairing, ignore `--full`, treat an unlistable directory as empty) and confirm a test goes red.
+- **Extracted text is derived, keyed by hash, and never trusted over the PDF.** The extraction store lives in the cache and is deleted-and-rebuilt on any schema mismatch; extraction refuses a file whose size/mtime differs from the scan (so text is never filed under the wrong bytes); `page_id` is internal and changes on re-extraction, so cite `artifact_id + pdf_page`. `pdf_page` (1-based position) and `printed_label` (a string) are never one parameter.
+- **A search must say what it could not see.** Never return a bare empty success: results carry coverage, and searching zero searchable documents is `KV_NOTHING_SEARCHABLE`.
 - **Backups never copy the file.** The catalog is WAL; use `sqlite3.Connection.backup`.
 - **Writing patch scripts:** do not rely on shell heredocs for code containing backslashes or adjacent quotes (they get mangled); use the Edit or Write tools.

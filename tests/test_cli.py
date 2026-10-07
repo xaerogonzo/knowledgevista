@@ -191,7 +191,7 @@ def test_doctor_summary_names_the_categories_it_checked(capsys, tmp_path, lib):
     run_json(capsys, tmp_path, "scan")
     code, env, _ = run_json(capsys, tmp_path, "doctor")
     summary = env["records"][0]
-    assert code == 0 and summary["type"] == "summary" and summary["categories_checked"] == ["filesystem", "catalog"]
+    assert code == 0 and summary["type"] == "summary" and summary["categories_checked"] == ["filesystem", "catalog", "extraction", "search"]
 
 
 def test_doctor_exits_1_when_it_finds_catalog_errors(capsys, tmp_path, lib):
@@ -245,9 +245,9 @@ def test_every_command_is_documented_and_every_documented_command_exists():
     contract = (ROOT / "docs" / "CLI_CONTRACT.md").read_text(encoding="utf-8")
     parser = cli.build_parser()
     sub = next(a for a in parser._actions if a.dest == "command")
-    real = set(sub.choices) - {"root"} | {"root add", "root list"}
-    documented = {re.match(r"\| `([a-z ]+?)(?: [<\[-].*)?` \|", row).group(1)
-                  for row in contract.splitlines() if re.match(r"\| `(root |scan|stats|explain|doctor|verify)", row)}
+    real = set(sub.choices) - {"root", "import"} | {"root add", "root list", "import openchem-index"}
+    names = "root add|root list|import openchem-index|scan|stats|explain|doctor|verify|extract|search|show"
+    documented = {m.group(1) for row in contract.splitlines() if (m := re.match(rf"\| `({names})[ `]", row))}
     assert documented == real, f"commands drifted: code {sorted(real)} vs docs {sorted(documented)}"
 
 

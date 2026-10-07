@@ -59,6 +59,10 @@ Argument errors under `--json` are envelopes too (`KV_INVALID_ARGUMENTS`, exit 2
 | `KV_CATALOG_TOO_NEW` | the catalog was written by a newer Knowledge Vista and was left untouched |
 | `KV_CATALOG_MISSING` | there is no catalog at the given path |
 | `KV_DOCTOR_FOUND_PROBLEMS` | `doctor` found catalog errors |
+| `KV_DEPENDENCY_MISSING` | an optional group is not installed (for example `extract`); the message names the install command |
+| `KV_NOT_EXTRACTED` | the document exists but its text has not been extracted yet. Distinct from `KV_NOT_FOUND`: "could not look" is not "none exist" |
+| `KV_EXTRACTION_FAILED` | `extract` could not read any document it tried |
+| `KV_NOTHING_SEARCHABLE` | a search ran over zero searchable documents, so "no hits" would mean nothing |
 | `KV_INTERNAL` | an unexpected failure (a bug); the message names the exception |
 
 Warning and finding codes (`KV_ROOT_VOLUME_CHANGED`, `KV_MASS_MISSING`, `KV_UNREADABLE_DIRECTORY`,
@@ -67,8 +71,8 @@ Warning and finding codes (`KV_ROOT_VOLUME_CHANGED`, `KV_MASS_MISSING`, `KV_UNRE
 ## Commands
 
 Each command is one of: **read** (leaves source files and the catalog unchanged), **catalog** (writes the catalog
-only), or **filesystem** (touches the user's files; none exist yet). Source files are never written by any command
-in this milestone.
+only), **cache** (writes only the rebuildable extraction store, never the catalog), or **filesystem** (touches the
+user's files; none exist yet). Source files are never written by any command in this milestone.
 
 | Command | Kind | Does |
 |---|---|---|
@@ -79,6 +83,10 @@ in this milestone.
 | `explain <reference>` | read | everything known about one document: identity, locations and their history, warnings |
 | `doctor` | read | structural health; **diagnoses, never repairs**; reads no file contents |
 | `verify [--root R]` | read | re-read every active file and check its bytes; the slow, expensive check |
+| `extract [--root R] [--force] [--retry-failed] [--rebuild-imported] [--limit N]` | cache | read PDF text into the extraction store, in a bounded worker process. Needs the `extract` group. Re-extracts only what is new or stale |
+| `search <query> [--near T] [--within N] [--also T] [--file S] [--limit N]` | read | find pages by their words; every result carries a `coverage` statement of what could not be searched |
+| `show <reference> (--pdf-page N or --label L)` | read | one extracted page. Physical position and printed label are different parameters, never one ambiguous "page" |
+| `import openchem-index <path>` | cache | use an OpenChem `<library>.index.sqlite` as provisional search text for documents whose hash the catalog already holds |
 
 `<reference>` is a document id, an artifact SHA-256 (or a unique prefix of 8+ hex characters), or a path / file
 name. A name that matches more than one document is `KV_AMBIGUOUS`; a name that only matches a *past* location is

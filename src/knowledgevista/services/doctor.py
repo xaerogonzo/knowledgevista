@@ -19,7 +19,7 @@ from typing import Any
 from knowledgevista.db.migrations import current_version, load_migrations
 from knowledgevista.domain.pathkeys import fs_path
 
-CHECKED_CATEGORIES = ["filesystem", "catalog"]
+CHECKED_CATEGORIES = ["filesystem", "catalog", "extraction", "search"]
 
 
 @dataclass
@@ -35,7 +35,8 @@ class Finding:
                 "message": self.message, "details": self.details}
 
 
-def run_doctor(conn: sqlite3.Connection) -> list[Finding]:
+def run_doctor(conn: sqlite3.Connection, index: sqlite3.Connection | None = None) -> list[Finding]:
+    """`index` is the extraction store, or None if there is none (never extracted, or the cache was deleted)."""
     found: list[Finding] = []
     add = lambda *a, **k: found.append(Finding(*a, **k))  # noqa: E731
 
@@ -92,7 +93,50 @@ def run_doctor(conn: sqlite3.Connection) -> list[Finding]:
             if counts.get(state):
                 add("filesystem", "warning", code, f"{root['label']}: {counts[state]} file(s) are {state}.",
                     {"root_id": root["root_id"], "count": counts[state]})
+    _check_extraction(conn, index, found)
     return found
+
+
+def _check_extraction(conn: sqlite3.Connection, index: sqlite3.Connection | None, found: list[Finding]) -> None:
+    from knowledgevista.errors import KvError
+    from knowledgevista.extract.profile import IMPORTED_SOURCE, current_profile
+    from knowledgevista.index.store import consistency_problems
+
+    pdfs = {r[0] for r in conn.execute("SELECT artifact_id FROM artifact WHERE content_kind = 'pdf'")}
+    if index is None:
+        if pdfs:
+            found.append(Finding("extraction", "info", "KVD_NOT_EXTRACTED",
+                                 f"{len(pdfs)} PDF(s) have no extracted text, so none are searchable. Run: kv extract (or import an OpenChem index).",
+                                 {"count": len(pdfs)}))
+        return
+    quick = index.execute("PRAGMA quick_check").fetchone()[0]
+    if quick != "ok":
+        found.append(Finding("search", "error", "KVD_INDEX_DAMAGED", f"The extraction store failed its integrity check ({quick}). It is a cache: delete it and run kv extract.", {}))
+        return
+    for problem in consistency_problems(index):
+        found.append(Finding("search", "error", "KVD_INDEX_INCONSISTENT", f"{problem}. The store is rebuildable: run kv extract --force.", {}))
+    try:
+        current = current_profile().profile_id
+    except KvError:
+        current = None  # PyMuPDF not installed: staleness cannot be judged, and that is not a catalog problem
+    rows = index.execute("SELECT artifact_id, source, status, profile_id FROM extraction").fetchall()
+    by_artifact = {r["artifact_id"]: r for r in rows}
+    missing = len(pdfs - by_artifact.keys())
+    if missing:
+        found.append(Finding("extraction", "info", "KVD_NOT_EXTRACTED", f"{missing} PDF(s) have no extracted text yet.", {"count": missing}))
+    orphans = len(by_artifact.keys() - pdfs)
+    if orphans:
+        found.append(Finding("extraction", "warning", "KVD_ORPHAN_EXTRACTION", f"{orphans} extraction(s) belong to artifacts the catalog does not have (harmless; rebuild with kv extract --force).", {"count": orphans}))
+    stale = sum(1 for r in rows if current and r["source"] != IMPORTED_SOURCE and r["profile_id"] != current and r["artifact_id"] in pdfs)
+    if stale:
+        found.append(Finding("extraction", "warning", "KVD_STALE_EXTRACTION", f"{stale} extraction(s) were made by an older extractor profile. Run: kv extract", {"count": stale}))
+    for status, code in (("partial", "KVD_PARTIAL_EXTRACTION"), ("failed", "KVD_FAILED_EXTRACTION")):
+        count = sum(1 for r in rows if r["status"] == status and r["artifact_id"] in pdfs)
+        if count:
+            found.append(Finding("extraction", "warning", code, f"{count} document(s) {'were only partially extracted' if status == 'partial' else 'failed extraction'}; searches over them are incomplete.", {"count": count}))
+    provisional = sum(1 for r in rows if r["source"] == IMPORTED_SOURCE and r["artifact_id"] in pdfs)
+    if provisional:
+        found.append(Finding("extraction", "info", "KVD_PROVISIONAL_IMPORT", f"{provisional} document(s) use text imported from the OpenChem index. It is searchable; kv extract --rebuild-imported replaces it with native extraction.", {"count": provisional}))
 
 
 def has_errors(findings: list[Finding]) -> bool:
