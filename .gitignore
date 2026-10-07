@@ -30,5 +30,20 @@ kv-private/
 
 # Local config, logs, scratch
 .env
+.env.*
 *.log
 scratch/
+
+# Per-checkout agent/editor state: worktrees, local permissions, MCP server configs and workspace files carry
+# machine paths and personal settings.
+.claude/worktrees/
+.claude/settings.local.json
+.mcp.json
+.idea/
+.vscode/
+*.code-workspace
+
+# OS litter
+.DS_Store
+Thumbs.db
+desktop.ini
