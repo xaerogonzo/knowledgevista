@@ -33,7 +33,7 @@ first, and reversible.
 See [docs/INVARIANTS.md](docs/INVARIANTS.md), [docs/SAFETY_MODEL.md](docs/SAFETY_MODEL.md) and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Try it (milestones 1 to 3)
+## Try it (milestones 1 to 4)
 
 ```bash
 uv sync --extra extract        # PyMuPDF, needed only to read PDF text
@@ -64,9 +64,22 @@ uv run kv config set mailto you@example.org  # optional: Crossref's courtesy add
 uv run kv resolve --online --accept-safe     # resumable: a stopped run continues from its cache
 ```
 
+Find the same thing twice, and organise without moving anything:
+
+```bash
+uv run kv relate               # propose duplicates, supplements, chapters, versions; changes nothing
+uv run kv dupes                # the four levels: same bytes, same text, same publication, related work
+uv run kv relations list       # each proposal with its evidence
+uv run kv relations accept 3fa9c2d1   # a same-document proposal MERGES two documents (nothing is deleted; `kv document split` undoes it)
+uv run kv collection create "To read" kaya2022.pdf
+uv run kv tag add toxicology kaya2022.pdf
+uv run kv search "solubility tag:toxicology year:2015-"   # filters read accepted metadata only
+uv run kv view inbox           # what needs a person first
+```
+
 Add `--json` for machine output (see [docs/CLI_CONTRACT.md](docs/CLI_CONTRACT.md)); [docs/SEARCH.md](docs/SEARCH.md) says
 exactly what search does and does not do, and [docs/METADATA.md](docs/METADATA.md) what a proposal is, how a DOI is judged to be
-a document's own, and what the batch rule may and may not do. Nothing here writes to your folders.
+a document's own, and what the batch rule may and may not do; [docs/RELATIONS.md](docs/RELATIONS.md) says what a relation, a duplicate and a merge are. Nothing here writes to your folders.
 
 ## Develop
 

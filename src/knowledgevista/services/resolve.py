@@ -92,6 +92,13 @@ def candidates(conn: sqlite3.Connection, text: str) -> list[Match]:
         row = conn.execute("SELECT artifact_id FROM document_artifact WHERE document_id = ? AND canonical = 1", (lowered,)).fetchone()
         if row:
             return [Match(lowered, row[0], None, None, None, False, "document_id")]
+        # A document a merge retired holds no artifact now, but its id must still resolve (its history is the point), and a command
+        # that reads text follows its artifact, which lives in the survivor.
+        retired = conn.execute("SELECT detail FROM document_event WHERE document_id = ? AND event = 'merged_into' ORDER BY event_id DESC", (lowered,)).fetchone()
+        if retired:
+            import json
+            artifacts = json.loads(retired[0] or "{}").get("artifacts") or [""]
+            return [Match(lowered, artifacts[0], None, None, None, False, "document_id")]
     sha = normalise_sha256(text)
     if sha:
         found = _by_artifact(conn, sha, "artifact")

@@ -154,7 +154,7 @@ def test_resolve_review_accept_explain_stats_doctor_end_to_end(capsys, tmp_path,
     assert set(meta["titles_without"]) <= {"candidates_awaiting_review", "no_title_found", "no_text_layer", "not_extracted", "not_resolved_yet"}
 
     doctor, _ = kv(capsys, tmp_path, "doctor")
-    assert doctor["ok"] and doctor["records"][0]["categories_checked"][-1] == "metadata"
+    assert doctor["ok"] and "metadata" in doctor["records"][0]["categories_checked"]
 
 
 def test_a_second_resolve_changes_nothing_through_the_cli(capsys, tmp_path, extracted):

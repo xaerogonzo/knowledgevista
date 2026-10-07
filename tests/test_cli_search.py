@@ -46,7 +46,7 @@ def test_search_envelope_has_a_summary_with_coverage_then_hits(capsys, ready):
     code, env, _ = run_json(capsys, ready, "search", "aqueous solubility")
     assert code == 0 and env["ok"] and env["complete"] is True
     summary, *hits = env["records"]
-    assert summary["type"] == "summary" and summary["hits"] == 2 and summary["query"]["language_version"] == 1
+    assert summary["type"] == "summary" and summary["hits"] == 2 and summary["query"]["language_version"] == 2
     assert summary["coverage"]["searchable"] == 3 and summary["coverage"]["no_text_layer"] == 1 and summary["coverage"]["extraction_failed"] == 1
     assert [h["type"] for h in hits] == ["hit", "hit"] and hits[0]["anchor"]["pdf_page"] == 2
     assert any(w["code"] == "KV_SEARCH_COVERAGE" for w in env["warnings"]), "a hit list over a partly unsearchable library says so"
@@ -114,7 +114,7 @@ def test_stats_and_doctor_cover_extraction_and_search(capsys, ready):
     _, env, _ = run_json(capsys, ready, "stats")
     assert env["records"][0]["search"]["not_yet_extracted"] == 4
     _, env, _ = run_json(capsys, ready, "doctor")
-    assert env["records"][0]["categories_checked"] == ["filesystem", "catalog", "extraction", "search", "metadata"]
+    assert env["records"][0]["categories_checked"] == ["filesystem", "catalog", "extraction", "search", "metadata", "relationships"]
     assert any(r.get("code") == "KVD_NOT_EXTRACTED" for r in env["records"])
     run_json(capsys, ready, "extract")
     _, env, _ = run_json(capsys, ready, "stats")

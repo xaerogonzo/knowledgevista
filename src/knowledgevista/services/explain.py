@@ -1,16 +1,18 @@
 """`kv explain`: everything the catalog knows about one document, and where each fact came from.
 
 Read-only. Built to answer "what is this, where is it, what happened to it, and is anything wrong?" without anyone
-reading SQL. Sections that belong to later milestones (relations, extraction) say so explicitly rather than
+reading SQL. Sections that belong to later milestones (extraction) say so explicitly rather than
 being left out: an absent section would read as "none exist".
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from knowledgevista.domain.kinds import extension_kind, extension_of, kinds_disagree
 from knowledgevista.errors import ErrorCode, KvError
+from knowledgevista.services import organize, relations
 from knowledgevista.services.metadata_report import document_metadata
 
 
@@ -69,6 +71,29 @@ def explain_document(conn: sqlite3.Connection, document_id: str) -> dict:
     return {
         "document_id": document_id, "created_at": document["created_at"], "artifacts": artifacts,
         "metadata": document_metadata(conn, document_id),
-        "relations": {"status": "not_yet_available"}, "extraction": {"status": "not_yet_available"},
+        "relations": _relations(conn, document_id, document),
+        "extraction": {"status": "not_yet_available"},
+        "organization": {"collections": organize.collections_of(conn, document_id), "tags": organize.tags_of(conn, document_id)},
         "warnings": warnings,
     }
+
+
+def _relations(conn: sqlite3.Connection, document_id: str, document: sqlite3.Row) -> dict:
+    """Accepted relations, open proposals about this document or its artifacts, and the merge/split history."""
+    artifacts = [r[0] for r in conn.execute("SELECT artifact_id FROM document_artifact WHERE document_id = ?", (document_id,))]
+    ends = [document_id, *artifacts]
+    marks = ",".join("?" * len(ends))
+    proposals = [
+        {"candidate_id": r["candidate_id"], "kind": r["kind"], "level": r["level"], "source": r["source_id"], "target": r["target_id"],
+         "confidence": r["confidence"], "evidence": json.loads(r["evidence_json"])}
+        for r in conn.execute(
+            f"SELECT * FROM relation_candidate WHERE status = 'proposed' AND level <> 'group' AND (source_id IN ({marks}) OR target_id IN ({marks})) "
+            "ORDER BY kind, candidate_id", (*ends, *ends))
+    ]
+    groups = [{"candidate_id": r["candidate_id"], "kind": r["kind"], "confidence": r["confidence"]} for r in conn.execute(
+        "SELECT candidate_id, kind, confidence FROM relation_candidate WHERE status = 'proposed' AND level = 'group' AND members_json LIKE ?",
+        (f'%"{document_id}"%',))]
+    history = [{"at": r["at"], "event": r["event"], "actor": r["actor"], "detail": json.loads(r["detail"] or "{}")} for r in conn.execute(
+        "SELECT * FROM document_event WHERE document_id = ? ORDER BY event_id", (document_id,))]
+    return {"status": "available", **relations.relations_of_document(conn, document_id), "proposals": proposals, "group_proposals": groups,
+            "history": history, "retired_at": document["retired_at"], "merged_into": document["merged_into"]}

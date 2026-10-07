@@ -19,6 +19,7 @@ from knowledgevista.domain.doi import normalise_doi
 
 FIELDS = ("doi", "title", "authors", "year", "container", "publisher", "type", "volume", "issue", "pages", "isbn", "arxiv")
 MIN_YEAR, MAX_YEAR = 1400, 2100
+IDENTIFIER_FIELDS = ("doi", "isbn", "arxiv", "year")
 _ARXIV = re.compile(r"^(?:arxiv:)?(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[a-z]{2})?/\d{7})(?:v\d+)?$", re.IGNORECASE)
 
 
@@ -38,7 +39,10 @@ def normalise(field: str, raw: object) -> str:
         raise ValueError(f"unknown field {field!r}; the fields are: {', '.join(FIELDS)}")
     if field == "authors":
         return _authors(raw)
-    text = titles.clean(str(raw if raw is not None else ""))
+    # Free text loses markup and entities (a provider's title carries JATS tags); an IDENTIFIER never does, because it can contain
+    # `<` and `>` itself: an old Wiley DOI is `10.1002/(sici)1096-987x(199604)17:5/6<490::aid-jcc1>3.0.co;2-p`, and stripping
+    # "tags" from it stores a different, wrong DOI (found by `doctor` on a real library).
+    text = " ".join(str(raw if raw is not None else "").split()) if field in IDENTIFIER_FIELDS else titles.clean(str(raw if raw is not None else ""))
     if not text:
         raise ValueError(f"{field} cannot be empty; to say a value is unknown, leave it unset")
     if field == "doi":

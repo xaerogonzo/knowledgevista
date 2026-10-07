@@ -500,3 +500,15 @@ def test_a_safe_doi_that_is_not_classified_own_is_never_accepted_by_the_rule(env
     a = doc_ids(env)[0]
     propose(env, a, spec(field="doi", value=DOI, source="pdf_text_doi", classification="ambiguous", review_level="safe"))
     assert review.accept_safe_for_document(env.conn, a).accepted == [] and "doi" not in metadata.get_values(env.conn, a)
+
+
+def test_a_doi_containing_angle_brackets_is_stored_as_printed_not_stripped_like_markup(env):
+    """Old Wiley DOIs contain `<` and `>`. Free text loses tags; an identifier must not (doctor found 4 corrupted on a real library)."""
+    a = doc_ids(env)[0]
+    sici = "10.1002/(SICI)1096-987X(199604)17:5/6<490::AID-JCC1>3.0.CO;2-P"
+    metadata.set_value(env.conn, a, "doi", sici)
+    stored = metadata.get_values(env.conn, a)["doi"]["value"]
+    assert stored == sici.lower() and "<490::aid-jcc1>" in stored
+    from knowledgevista.domain import fields
+    assert fields.normalise("doi", stored) == stored  # idempotent, which is what doctor checks
+    assert fields.normalise("title", "Cu<sub>2</sub>O in water") == "Cu2O in water"  # free text still loses markup

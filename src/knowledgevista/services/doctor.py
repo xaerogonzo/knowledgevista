@@ -19,7 +19,7 @@ from typing import Any
 from knowledgevista.db.migrations import current_version, load_migrations
 from knowledgevista.domain.pathkeys import fs_path
 
-CHECKED_CATEGORIES = ["filesystem", "catalog", "extraction", "search", "metadata"]
+CHECKED_CATEGORIES = ["filesystem", "catalog", "extraction", "search", "metadata", "relationships"]
 
 
 @dataclass
@@ -51,7 +51,7 @@ def run_doctor(conn: sqlite3.Connection, index: sqlite3.Connection | None = None
     if current_version(conn) != latest:
         add("catalog", "warning", "KVD_SCHEMA_BEHIND", f"Schema is at version {current_version(conn)}, latest is {latest}.")
     for row in conn.execute(
-        "SELECT d.document_id FROM document d WHERE NOT EXISTS ("
+        "SELECT d.document_id FROM document d WHERE d.retired_at IS NULL AND NOT EXISTS ("
         "SELECT 1 FROM document_artifact da WHERE da.document_id = d.document_id AND da.canonical = 1)"
     ):
         add("catalog", "error", "KVD_NO_CANONICAL", "A document has no canonical artifact.", {"document_id": row[0]})
@@ -95,6 +95,7 @@ def run_doctor(conn: sqlite3.Connection, index: sqlite3.Connection | None = None
                     {"root_id": root["root_id"], "count": counts[state]})
     _check_extraction(conn, index, found)
     _check_metadata(conn, found)
+    _check_relationships(conn, found)
     return found
 
 
@@ -165,11 +166,45 @@ def _check_metadata(conn: sqlite3.Connection, found: list[Finding]) -> None:
         add("metadata", "error", "KVD_VALUE_WITHOUT_SOURCE", "An accepted value names a source proposal that does not exist.",
             {"document_id": row["document_id"], "field": row["field"]})
     for row in conn.execute(
-        "SELECT c.candidate_id FROM metadata_candidate c WHERE NOT EXISTS (SELECT 1 FROM document_artifact da "
-        "WHERE da.document_id = c.document_id AND da.artifact_id = c.artifact_id)"
+        "SELECT c.candidate_id FROM metadata_candidate c JOIN document d ON d.document_id = c.document_id AND d.retired_at IS NULL "
+        "WHERE NOT EXISTS (SELECT 1 FROM document_artifact da WHERE da.document_id = c.document_id AND da.artifact_id = c.artifact_id)"
     ):
         add("metadata", "error", "KVD_CANDIDATE_WRONG_ARTIFACT", "A proposal's evidence came from an artifact that does not belong to its document.",
             {"candidate_id": row["candidate_id"]})
+
+
+def _check_relationships(conn: sqlite3.Connection, found: list[Finding]) -> None:
+    add = lambda *a, **k: found.append(Finding(*a, **k))  # noqa: E731
+    for row in conn.execute("SELECT run_id, started_at FROM relation_run WHERE status = 'running'"):
+        add("relationships", "warning", "KVD_STALE_RELATION_RUN", "A relate run was started and never finished (killed?). The next run closes it.",
+            {"run_id": row["run_id"], "started_at": row["started_at"]})
+    for row in conn.execute("SELECT document_id, merged_into FROM document WHERE retired_at IS NOT NULL"):
+        target = conn.execute("SELECT retired_at FROM document WHERE document_id = ?", (row["merged_into"],)).fetchone() if row["merged_into"] else None
+        if target is None:
+            add("relationships", "error", "KVD_RETIRED_WITHOUT_SURVIVOR", "A retired document does not say which document it was merged into.", {"document_id": row["document_id"]})
+        elif target["retired_at"] is not None:
+            add("relationships", "warning", "KVD_MERGE_CHAIN", "A document was merged into one that was itself merged away since.", {"document_id": row["document_id"]})
+        if conn.execute("SELECT 1 FROM document_artifact WHERE document_id = ?", (row["document_id"],)).fetchone():
+            add("relationships", "error", "KVD_RETIRED_HOLDS_ARTIFACTS", "A retired document still holds artifacts.", {"document_id": row["document_id"]})
+    for row in conn.execute(
+        "SELECT r.relation_id, r.kind FROM document_relation r JOIN document d ON d.document_id IN (r.source_id, r.target_id) "
+        "WHERE r.retracted_at IS NULL AND d.retired_at IS NOT NULL"
+    ):
+        add("relationships", "warning", "KVD_RELATION_TO_RETIRED", f"A live {row['kind']} relation points at a document that was merged away.", {"relation_id": row["relation_id"]})
+    for kind in ("part_of", "supplement_of", "version_of"):
+        edges: dict[str, list[str]] = {}
+        for row in conn.execute("SELECT source_id, target_id FROM document_relation WHERE kind = ? AND retracted_at IS NULL", (kind,)):
+            edges.setdefault(row["source_id"], []).append(row["target_id"])
+        for start in edges:
+            seen, frontier = set(), list(edges[start])
+            while frontier:
+                node = frontier.pop()
+                if node == start:
+                    add("relationships", "error", "KVD_RELATION_CYCLE", f"A document is its own ancestor through {kind}.", {"document_id": start, "kind": kind})
+                    break
+                if node not in seen:
+                    seen.add(node)
+                    frontier += edges.get(node, [])
 
 
 def has_errors(findings: list[Finding]) -> bool:

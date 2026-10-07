@@ -10,11 +10,16 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from knowledgevista import __version__, paths
+from knowledgevista import __version__, cli_relations, paths
+from knowledgevista.cli_support import Outcome
+from knowledgevista.cli_support import catalog_path as _catalog_path
+from knowledgevista.cli_support import index_for as _index
+from knowledgevista.cli_support import label_of as _label
+from knowledgevista.cli_support import say as _say
+from knowledgevista.cli_support import search_outcome
 from knowledgevista.db.catalog import open_catalog
 from knowledgevista.db.migrations import SchemaTooNew
 from knowledgevista.domain import fields as fieldmod
@@ -29,6 +34,7 @@ from knowledgevista.network.policy import Fetcher, NetworkPolicy
 from knowledgevista.providers.crossref import CrossrefProvider
 from knowledgevista.services import doctor as doctor_service
 from knowledgevista.services import metadata as metadata_service
+from knowledgevista.services import organize as organize_service
 from knowledgevista.services import resolve_metadata as resolve_metadata_service
 from knowledgevista.services import review as review_service
 from knowledgevista.services import settings as settings_service
@@ -43,19 +49,6 @@ from knowledgevista.services import stats as stats_service
 from knowledgevista.services import verify as verify_service
 
 
-@dataclass
-class Outcome:
-    records: list[dict[str, Any]] = field(default_factory=list)
-    warnings: list[dict[str, Any]] = field(default_factory=list)
-    errors: list[dict[str, Any]] = field(default_factory=list)
-    lines: list[str] = field(default_factory=list)  # the human rendering
-    complete: bool = True  # False when the records are a truncated view of a larger result
-
-    @property
-    def ok(self) -> bool:
-        return not self.errors
-
-
 class _Parser(argparse.ArgumentParser):
     """In `--json` mode an argument error is an envelope (code KV_INVALID_ARGUMENTS), never a usage dump on stderr."""
 
@@ -67,20 +60,7 @@ class _Parser(argparse.ArgumentParser):
         super().error(message)
 
 
-def _say(message: str) -> None:
-    print(message, file=sys.stderr, flush=True)
-
-
 # --- commands ---------------------------------------------------------------------------------------------------
-
-
-def _catalog_path(args: argparse.Namespace) -> Path:
-    return Path(args.catalog) if getattr(args, "catalog", None) else paths.catalog_path()
-
-
-def _index(args: argparse.Namespace, *, create: bool, read_only: bool = False):
-    """The extraction store beside this catalog, or None if there is none (or it is from another schema version)."""
-    return open_index(paths.index_path(_catalog_path(args)), create=create, read_only=read_only)
 
 
 def cmd_root_add(args: argparse.Namespace) -> Outcome:
@@ -276,41 +256,15 @@ def cmd_extract(args: argparse.Namespace) -> Outcome:
 
 def cmd_search(args: argparse.Namespace) -> Outcome:
     query = parse_query(args.query, near=args.near, within=args.within, also=args.also, path_contains=args.file)
-    conn = open_catalog(_catalog_path(args), create=False, read_only=True)
-    index = _index(args, create=False, read_only=True)
-    try:
-        result = search_service.search(conn, index, query, limit=args.limit)
-    finally:
-        conn.close()
-        if index is not None:
-            index.close()
-    cov = result.coverage
-    out = Outcome(complete=not result.truncated)
-    out.records.append({
-        "type": "summary",
-        "query": {"alternatives": list(query.alternatives), "near": list(query.near), "within": query.within,
-                  "also": list(query.also), "path_contains": query.path_contains, "language_version": query.language_version},
-        "hits": len(result.hits), "truncated": result.truncated, "coverage": cov,
-    })
-    out.records += [{"type": "hit", **hit} for hit in result.hits]
-    if cov["searchable"] == 0:
-        out.errors.append(KvError(ErrorCode.NOTHING_SEARCHABLE,
-                                  "No document has extracted text, so this search could not have found anything. Run: kv extract",
-                                  {"coverage": cov}).as_dict())
-    else:
-        caveats = [f"{cov[key]} {label}" for key, label in (
-            ("not_yet_extracted", "PDF(s) not extracted yet"), ("no_text_layer", "scan(s) with no text layer"),
-            ("partially_indexed", "partially indexed"), ("extraction_failed", "failed extraction(s)")) if cov[key]]
-        if caveats:
-            out.warnings.append({"code": "KV_SEARCH_COVERAGE", "details": cov,
-                                 "message": "Not everything was searchable: " + ", ".join(caveats) + ". A missing hit is not proof of absence."})
-    for hit in result.hits:
-        where = hit["paths"][0]["path"] if hit["paths"] else hit["artifact_id"][:12]
-        label = f" [{hit['printed_label']}]" if hit["printed_label"] else ""
-        provisional = "  (provisional)" if hit["extraction"]["provisional"] else ""
-        out.lines.append(f"{where}  p{hit['pdf_page']}{label}{provisional}\n    {' '.join(hit['snippet'].split())}")
-    out.lines.append(f"{len(result.hits)} page(s)" + (f" (limit {args.limit}; more exist)" if result.truncated else ""))
-    out.lines += [f"  note: {w['message']}" for w in out.warnings]
+    out = search_outcome(args, query)
+    if args.save:
+        conn = open_catalog(_catalog_path(args), create=False)
+        try:
+            saved = organize_service.save_search(conn, args.save, query, replace=args.replace)
+        finally:
+            conn.close()
+        out.records.append({"type": "saved", **saved})
+        out.lines.append(f"saved as {saved['name']!r}" + (" (replaced the earlier one)" if saved["replaced"] else "") + ": kv saved run " + repr(saved["name"]))
     return out
 
 
@@ -351,14 +305,6 @@ def cmd_import_index(args: argparse.Namespace) -> Outcome:
                              "message": f"{report.unmatched} legacy row(s) match no artifact (not scanned yet, or the file changed). "
                                         "Run kv scan, then import again."})
     return out
-
-
-def _label(conn, document_id: str) -> str:
-    """A short human name for a document: its current path, else the start of its id."""
-    row = conn.execute(
-        "SELECT l.relative_path FROM location l JOIN document_artifact da ON da.artifact_id = l.artifact_id "
-        "WHERE da.document_id = ? AND l.ended_at IS NULL ORDER BY l.state, l.path_key LIMIT 1", (document_id,)).fetchone()
-    return row[0] if row else document_id[:12]
 
 
 def cmd_resolve(args: argparse.Namespace) -> Outcome:
@@ -584,6 +530,8 @@ def build_parser(json_mode: bool = False) -> _Parser:
     search.add_argument("--also", action="append", default=[], help="also somewhere on the same page (repeatable)")
     search.add_argument("--file", help="only files whose path contains this")
     search.add_argument("--limit", type=int, default=20)
+    search.add_argument("--save", metavar="NAME", help="also save this query (the parsed query, never its results) under a name: kv saved run NAME")
+    search.add_argument("--replace", action="store_true", help="with --save: overwrite a saved search of that name")
     search.set_defaults(handler=cmd_search)
     show = sub.add_parser("show", parents=[shared], help="print one extracted page")
     show.add_argument("reference", help="a document id, sha256 or path/file name")
@@ -653,6 +601,8 @@ def build_parser(json_mode: bool = False) -> _Parser:
     cfg_set.add_argument("key")
     cfg_set.add_argument("value")
     cfg_set.set_defaults(handler=cmd_config)
+
+    cli_relations.add_parsers(sub, shared, lambda **kw: _Sub(json_mode, **kw))
     return parser
 
 
@@ -685,7 +635,7 @@ def main(argv: list[str] | None = None) -> int:
         if handler is None:
             raise KvError(ErrorCode.INVALID_ARGUMENTS, "No command given. Try: kv --help")
         command = args.command
-        if command in ("root", "import", "review", "metadata", "config"):
+        if command in ("root", "import", "review", "metadata", "config", "relations", "document", "collection", "tag", "saved"):
             command = f"{command} {getattr(args, command + '_command')}"
         outcome = handler(args)
     except KvError as exc:

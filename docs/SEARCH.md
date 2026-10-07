@@ -21,12 +21,13 @@ you which page to open, never what a value is. The page in the PDF is the author
 | `--near T` | the phrase within `--within` words (default 30) of `T` |
 | `--also T` | `T` anywhere on the same page |
 | `--file S` | only files whose path contains `S` |
+| `tag:toxicology`, `collection:"To read"`, `year:2015-2020`, `doi:10.1234/x`, `author:smith`, `kind:book` | only documents whose ACCEPTED metadata, tags or collections match (a proposal never narrows a search); several filters must all hold |
 
 Every term is quoted before it reaches the engine, so `2,4-DNT`, `NEAR(a b)`, `x AND y`, `-negated` and `col:umn` are
-searched as text and never parsed as operators. The only operator a term can carry is the trailing `*`.
+searched as text and never parsed as operators. The only operator a term can carry is the trailing `*`. Likewise only the six filter names above, at the start of a word, are filters: `Cu(II):` and `pH:7.4` stay text, and `"year:2020"` in quotes is searched for. A filter with no value is `KV_QUERY_INVALID`, and the search summary says how many documents the filters admitted.
 
 An empty query is `KV_QUERY_INVALID` (exit 2), never "no results". The query language is versioned
-(`query_language_version`, currently 1) so a saved search cannot silently change meaning.
+(`query_language_version`, currently 2: version 1 had no filters, and a version-1 saved search parses unchanged) so a saved search cannot silently change meaning.
 
 ## How text is split into words
 

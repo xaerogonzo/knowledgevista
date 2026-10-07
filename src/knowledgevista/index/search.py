@@ -16,14 +16,20 @@ WHAT SEARCH MEANS (docs/SEARCH.md is the readable version):
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from knowledgevista.domain.doi import normalise_doi
 from knowledgevista.errors import ErrorCode, KvError
 
-QUERY_LANGUAGE_VERSION = 1
+#: 2 added metadata filters (`tag:`, `collection:`, `doi:`, `year:`, `author:`, `kind:`). A version-1 saved search parses unchanged.
+QUERY_LANGUAGE_VERSION = 2
 DEFAULT_WITHIN = 30
+FILTER_FIELDS = ("author", "year", "doi", "kind", "tag", "collection")
+_FILTER = re.compile(r'(?<!\S)(' + "|".join(FILTER_FIELDS) + r'):(?:"([^"]*)"|(\S*))')
+_YEARS = re.compile(r"^(\d{4})?(?:-(\d{4})?)?$")
 
 
 @dataclass(frozen=True)
@@ -37,14 +43,37 @@ class Query:
     within: int = DEFAULT_WITHIN
     also: tuple[str, ...] = ()
     path_contains: str | None = None
+    #: (field, value) pairs that narrow the search to documents with that metadata; ALL must hold.
+    filters: tuple[tuple[str, str], ...] = ()
     language_version: int = QUERY_LANGUAGE_VERSION
+
+
+def extract_filters(text: str) -> tuple[str, tuple[tuple[str, str], ...]]:
+    """Pull `field:value` / `field:"a value"` filters out of the query text. ONLY the six known field names at the start of a
+    word are filters, so chemistry like `Cu(II):` or `pH:7.4` stays search text; quote a phrase to search for `"year:2020"`
+    literally. A filter with no value is KV_QUERY_INVALID, never a search that quietly ignores it."""
+    found: list[tuple[str, str]] = []
+
+    def take(match: re.Match[str]) -> str:
+        name, value = match.group(1), (match.group(2) if match.group(2) is not None else match.group(3)).strip()
+        if not value:
+            raise KvError(ErrorCode.QUERY_INVALID, f"The filter {name}: has no value.", {"filter": name})
+        if name == "year" and not (_YEARS.match(value) and any(re.findall(r"\d{4}", value))):
+            raise KvError(ErrorCode.QUERY_INVALID, f"year: wants a year (2020), a range (2015-2020) or an open range (2015- / -2020), not {value!r}.", {"filter": name})
+        if name == "doi" and not normalise_doi(value):
+            raise KvError(ErrorCode.QUERY_INVALID, f"doi: wants a DOI such as 10.1234/abc, not {value!r}.", {"filter": name})
+        found.append((name, value))
+        return " "
+
+    return " ".join(_FILTER.sub(take, text or "").split()), tuple(found)
 
 
 def parse_query(
     text: str, *, near: Iterable[str] = (), within: int = DEFAULT_WITHIN, also: Iterable[str] = (), path_contains: str | None = None
 ) -> Query:
-    """`text` is ONE phrase, or alternatives separated by `|`. Raises KV_QUERY_INVALID rather than returning a query
-    that would silently match nothing."""
+    """`text` is ONE phrase, or alternatives separated by `|`, plus optional `field:value` filters. Raises KV_QUERY_INVALID
+    rather than returning a query that would silently match nothing."""
+    text, filters = extract_filters(text)
     alternatives = tuple(part for part in (p.strip() for p in (text or "").split("|")) if part)
     if not alternatives:
         raise KvError(ErrorCode.QUERY_INVALID, "The query is empty: give a word or phrase to search for.", {"query": text})
@@ -55,7 +84,7 @@ def parse_query(
         raise KvError(ErrorCode.QUERY_INVALID, "--within must be at least 1.", {"within": within})
     return Query(
         alternatives, tuple(t.strip() for t in near if t and t.strip()), within,
-        tuple(t.strip() for t in also if t and t.strip()), path_contains or None,
+        tuple(t.strip() for t in also if t and t.strip()), path_contains or None, filters,
     )
 
 

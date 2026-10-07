@@ -190,7 +190,7 @@ def test_an_empty_or_meaningless_query_is_an_error_never_zero_hits(bad):
 def test_within_must_be_positive_and_the_language_version_is_recorded():
     with pytest.raises(KvError):
         qs.parse_query("x", within=0)
-    assert qs.parse_query("x").language_version == qs.QUERY_LANGUAGE_VERSION == 1
+    assert qs.parse_query("x").language_version == qs.QUERY_LANGUAGE_VERSION == 2
 
 
 def test_an_engine_level_parse_failure_is_a_query_error_not_a_crash(idx, monkeypatch):

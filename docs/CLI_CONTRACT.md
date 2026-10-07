@@ -86,7 +86,7 @@ user's files; none exist yet). Source files are never written by any command in 
 | `doctor` | read | structural health; **diagnoses, never repairs**; reads no file contents |
 | `verify [--root R]` | read | re-read every active file and check its bytes; the slow, expensive check |
 | `extract [--root R] [--force] [--retry-failed] [--rebuild-imported] [--limit N]` | cache | read PDF text into the extraction store, in a bounded worker process. Needs the `extract` group. Re-extracts only what is new or stale |
-| `search <query> [--near T] [--within N] [--also T] [--file S] [--limit N]` | read | find pages by their words; every result carries a `coverage` statement of what could not be searched |
+| `search <query> [--near T] [--within N] [--also T] [--file S] [--limit N] [--save NAME [--replace]]` | read | find pages by their words; every result carries a `coverage` statement of what could not be searched |
 | `show <reference> (--pdf-page N or --label L)` | read | one extracted page. Physical position and printed label are different parameters, never one ambiguous "page" |
 | `import openchem-index <path>` | cache | use an OpenChem `<library>.index.sqlite` as provisional search text for documents whose hash the catalog already holds |
 | `resolve [--online] [--list-requests] [--accept-safe] [--document D] [--root R] [--limit N] [--max-requests N] [--no-front] [--refresh-front]` | catalog | propose DOIs, titles, authors, ISBNs and arXiv ids from each document's text and file metadata, and with `--online` a provider's record of it. **Proposes; accepts nothing** unless `--accept-safe` (the named rule `safe_batch_v1`). Rerunning with nothing new changes nothing. `--online` needs `online_lookup` switched on and sends only a DOI or a title; `--list-requests` shows what that would be and sends nothing |
@@ -100,6 +100,30 @@ user's files; none exist yet). Source files are never written by any command in 
 | `config list` | read | every setting, its value and its default |
 | `config get <key>` | read | one setting |
 | `config set <key> <value>` | config | change a setting (`online_lookup`, `mailto`, `request_budget`); writes only the settings file |
+| `relate` | catalog | look across the whole library for the same publication twice, supplements, chapters of a book and versions, and PROPOSE each with its evidence. Relates and merges nothing |
+| `dupes` | read | the four levels of "the same thing twice", kept apart: same bytes at several paths, byte-different files with identical text, one DOI (or title and first author) under several documents, a preprint and its published version |
+| `related <reference>` | read | one document's accepted relations, open proposals, collections, tags and merge/split history |
+| `relations list [--kind K] [--status S] [--limit N] [--offset N]` | read | relation proposals, best evidence first |
+| `relations accept <id>... [--keep D]` | catalog | accept proposals. A `same_document` proposal MERGES the two documents; a `collection` proposal makes the collection |
+| `relations reject <id>...` | catalog | decide a proposal is wrong (kept, and not proposed again) |
+| `relations add <kind> <source> <target> [--artifacts] [--note T] [--position P]` | catalog | state a relation yourself. Document kinds: `supplement_of`, `part_of`, `version_of`, `related_to`; with `--artifacts`: `duplicate_of`, `derivative_of`, `replaces`, `equivalent_to` |
+| `relations remove <relation id>` | catalog | take a relation back; it stays recorded as retracted |
+| `document merge <keep> <absorb> [--reason T]` | catalog | make two documents one. The absorbed document's artifacts move to the survivor (every artifact id unchanged) and it is retired, not deleted |
+| `document split <document> <artifact>` | catalog | take one artifact out into its own document; if a merge retired a document that held only that artifact, it is revived under its original id |
+| `document canonical <document> <artifact> [--reason T]` | catalog | choose which artifact is read for text and metadata |
+| `collection create <name> [documents...] [--description T]` | catalog | a named group of documents (nothing is moved) |
+| `collection add <name> <documents...>` | catalog | add documents to a collection |
+| `collection remove <name> <documents...>` | catalog | take documents out of a collection (they are untouched) |
+| `collection list` | read | every collection and its size |
+| `collection show <name> [--limit N]` | read | a collection's members |
+| `collection delete <name>` | catalog | remove a collection from view; its record is kept |
+| `tag add <tag> <documents...>` | catalog | tag documents |
+| `tag remove <tag> <documents...>` | catalog | remove a tag from documents |
+| `tag list` | read | every tag and how many documents carry it |
+| `saved list` | read | saved searches |
+| `saved run <name> [--limit N]` | read | run a saved search against the library as it is now |
+| `saved delete <name>` | catalog | remove a saved search from view; its record is kept |
+| `view [name] [--limit N]` | read | a system view (`inbox`, `unresolved`, `ambiguous`, `missing`, `duplicates`, `new`, `untagged`, `uncollected`). A view is a query, not stored state; with no name, lists them |
 
 `<reference>` is a document id, an artifact SHA-256 (or a unique prefix of 8+ hex characters), or a path / file
 name. A name that matches more than one document is `KV_AMBIGUOUS`; a name that only matches a *past* location is
@@ -131,3 +155,26 @@ Warning codes: `KV_PROVIDER_STOPPED`, `KV_SAFE_RULE_SKIPPED`, `KV_RESOLVE_PROBLE
 | `request_budget` | `1000` | the most requests one online run may make, retries included |
 
 A damaged settings file yields the defaults (offline) and a `KV_SETTINGS_IGNORED` warning; it can never switch the network on.
+
+## Relation, duplicate and organisation commands
+
+**Two levels, never mixed.** An *artifact* relation is about bytes (`duplicate_of`, `derivative_of`, `replaces`, `equivalent_to`). A
+*document* relation is about library items (`supplement_of`, `part_of`, `version_of`, `related_to`). Making two documents ONE is a third
+thing, a merge, and is proposed as `same_document`. A `relation` record carries `level`, `kind`, `source`, `target`, `accepted_by` and
+`accepted_from_candidate`; a proposal carries `evidence` and a descriptive `confidence`.
+
+`relate` summary record: `documents`, `fingerprinted`, `proposals` (found, by kind), `outcomes` (`new`, `updated`, `unchanged`, `stale`,
+`decided`), `exact_copy_groups`, `proposals_waiting`. A rerun with nothing new changes nothing.
+
+Nothing is deleted. `document merge` retires the absorbed document (`retired_at`, `merged_into`) and keeps its record; `relations remove`
+and `collection delete` retract. A retired document is refused wherever a live one is needed (`KV_INVALID_ARGUMENTS`, naming the
+document it was merged into).
+
+**Search filters** (query language 2). `tag:`, `collection:`, `doi:`, `year:`, `author:`, `kind:` at the start of a word narrow a search
+to documents whose ACCEPTED metadata, tags or collections match (a proposal never narrows a search); `year:` takes `2020`, `2015-2020`,
+`2015-` or `-2020`; quote a value with spaces (`collection:"To read"`). Only those six names are filters, so `Cu(II):` or `pH:7.4` stay
+search text, and a filter with no value is `KV_QUERY_INVALID`. The search summary says how many documents the filters selected, so "no
+hits" is not read as "not in the library". A saved search stores the parsed query and its language version; a version newer than the
+program is refused, never reinterpreted.
+
+Warning codes: `KV_NO_TEXT_INDEX`, `KV_PROPOSAL_STALE` (a batch `relations accept` skipped a proposal whose evidence is gone; the rest were applied).

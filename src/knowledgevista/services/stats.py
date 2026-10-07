@@ -39,7 +39,8 @@ def library_stats(conn: sqlite3.Connection, index: sqlite3.Connection | None = N
         "FROM root r ORDER BY r.created_at")]
     return {
         "inventory": {
-            "roots": len(roots), "documents": scalar("SELECT COUNT(*) FROM document"),
+            "roots": len(roots), "documents": scalar("SELECT COUNT(*) FROM document WHERE retired_at IS NULL"),
+            "documents_merged_away": scalar("SELECT COUNT(*) FROM document WHERE retired_at IS NOT NULL"),
             "artifacts": scalar("SELECT COUNT(*) FROM artifact"),
             "locations_current": sum(by_state.values()), "locations_by_state": by_state,
             "locations_ended": scalar("SELECT COUNT(*) FROM location WHERE ended_at IS NOT NULL"),
@@ -61,4 +62,15 @@ def library_stats(conn: sqlite3.Connection, index: sqlite3.Connection | None = N
         },
         "search": coverage(conn, index),
         "metadata": metadata_stats(conn, index),
+        "organization": {
+            "collections": scalar("SELECT COUNT(*) FROM collection WHERE retired_at IS NULL"),
+            "tags": scalar("SELECT COUNT(DISTINCT tag_key) FROM document_tag"),
+            "saved_searches": scalar("SELECT COUNT(*) FROM saved_search WHERE retired_at IS NULL"),
+            "document_relations": scalar("SELECT COUNT(*) FROM document_relation WHERE retracted_at IS NULL"),
+            "artifact_relations": scalar("SELECT COUNT(*) FROM artifact_relation WHERE retracted_at IS NULL"),
+            "relation_proposals_waiting": scalar("SELECT COUNT(*) FROM relation_candidate WHERE status = 'proposed'"),
+            "documents_with_several_artifacts": scalar(
+                "SELECT COUNT(*) FROM (SELECT da.document_id FROM document_artifact da JOIN document d ON d.document_id = da.document_id "
+                "WHERE d.retired_at IS NULL GROUP BY da.document_id HAVING COUNT(*) > 1)"),
+        },
     }
