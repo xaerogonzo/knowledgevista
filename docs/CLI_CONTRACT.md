@@ -5,7 +5,7 @@ contract; the help text is not. A change that breaks anything here is an API bre
 
 Versions are separate numbers and evolve for different reasons: the **JSON envelope** version (this page), the
 **catalog schema** version (SQLite, internal), and later the **integration protocol** and **MCP** versions
-(`kv capabilities`, milestone 5). Nobody should read the SQLite schema as an API.
+(`kv capabilities`; see [INTEGRATION.md](INTEGRATION.md) and [MCP.md](MCP.md)). Nobody should read the SQLite schema as an API.
 
 ## Output
 
@@ -55,10 +55,11 @@ Argument errors under `--json` are envelopes too (`KV_INVALID_ARGUMENTS`, exit 2
 | `KV_METADATA_LOCKED` | the field's accepted value is locked; unlock it first (`kv metadata unlock`) |
 | `KV_NETWORK_DISABLED` | an online lookup was asked for but online lookups are switched off; the message says how to switch them on |
 | `KV_QUERY_INVALID` | a search query could not be parsed (search milestone) |
-| `KV_CURSOR_STALE` | a pagination cursor predates a significant catalog change |
+| `KV_CURSOR_STALE` | a pagination cursor predates a catalog change, or the listing it pointed into is no longer in the same order; run the command again without `--cursor` |
 | `KV_ROOT_UNAVAILABLE` | a root cannot be read right now; nothing was changed |
 | `KV_ROOT_OVERLAP` | a root would overlap an existing one |
 | `KV_CATALOG_TOO_NEW` | the catalog was written by a newer Knowledge Vista and was left untouched |
+| `KV_CATALOG_OUTDATED` | the catalog is from an older program and a read-only caller (`kv mcp`) will not upgrade it; any other `kv` command does, with a backup |
 | `KV_CATALOG_MISSING` | there is no catalog at the given path |
 | `KV_DOCTOR_FOUND_PROBLEMS` | `doctor` found catalog errors |
 | `KV_DEPENDENCY_MISSING` | an optional group is not installed (for example `extract`); the message names the install command |
@@ -86,11 +87,11 @@ user's files; none exist yet). Source files are never written by any command in 
 | `doctor` | read | structural health; **diagnoses, never repairs**; reads no file contents |
 | `verify [--root R]` | read | re-read every active file and check its bytes; the slow, expensive check |
 | `extract [--root R] [--force] [--retry-failed] [--rebuild-imported] [--limit N]` | cache | read PDF text into the extraction store, in a bounded worker process. Needs the `extract` group. Re-extracts only what is new or stale |
-| `search <query> [--near T] [--within N] [--also T] [--file S] [--limit N] [--save NAME [--replace]]` | read | find pages by their words; every result carries a `coverage` statement of what could not be searched |
+| `search <query> [--near T] [--within N] [--also T] [--file S] [--limit N] [--cursor C] [--save NAME [--replace]]` | read | find pages by their words; every result carries a `coverage` statement of what could not be searched |
 | `show <reference> (--pdf-page N or --label L)` | read | one extracted page. Physical position and printed label are different parameters, never one ambiguous "page" |
 | `import openchem-index <path>` | cache | use an OpenChem `<library>.index.sqlite` as provisional search text for documents whose hash the catalog already holds |
 | `resolve [--online] [--list-requests] [--accept-safe] [--document D] [--root R] [--limit N] [--max-requests N] [--no-front] [--refresh-front]` | catalog | propose DOIs, titles, authors, ISBNs and arXiv ids from each document's text and file metadata, and with `--online` a provider's record of it. **Proposes; accepts nothing** unless `--accept-safe` (the named rule `safe_batch_v1`). Rerunning with nothing new changes nothing. `--online` needs `online_lookup` switched on and sends only a DOI or a title; `--list-requests` shows what that would be and sends nothing |
-| `review list [--field F] [--review safe\|required] [--status S] [--limit N] [--offset N]` | read | the proposals waiting for a person, agreeing sources grouped as one item, most urgent first |
+| `review list [--field F] [--review safe\|required] [--status S] [--limit N] [--cursor C]` | read | the proposals waiting for a person, agreeing sources grouped as one item, most urgent first |
 | `review accept <id>... \| --safe` | catalog | accept proposals by id (8+ hex characters), or apply the safe batch rule to all documents |
 | `review reject <id>...` | catalog | decide a proposal is wrong; it is kept and not proposed again |
 | `metadata set <reference> <field> <value> [--no-lock]` | catalog | state a value by hand: validated, normalised, recorded as `assigned` and locked |
@@ -103,7 +104,7 @@ user's files; none exist yet). Source files are never written by any command in 
 | `relate` | catalog | look across the whole library for the same publication twice, supplements, chapters of a book and versions, and PROPOSE each with its evidence. Relates and merges nothing |
 | `dupes` | read | the four levels of "the same thing twice", kept apart: same bytes at several paths, byte-different files with identical text, one DOI (or title and first author) under several documents, a preprint and its published version |
 | `related <reference>` | read | one document's accepted relations, open proposals, collections, tags and merge/split history |
-| `relations list [--kind K] [--status S] [--limit N] [--offset N]` | read | relation proposals, best evidence first |
+| `relations list [--kind K] [--status S] [--limit N] [--cursor C]` | read | relation proposals, best evidence first |
 | `relations accept <id>... [--keep D]` | catalog | accept proposals. A `same_document` proposal MERGES the two documents; a `collection` proposal makes the collection |
 | `relations reject <id>...` | catalog | decide a proposal is wrong (kept, and not proposed again) |
 | `relations add <kind> <source> <target> [--artifacts] [--note T] [--position P]` | catalog | state a relation yourself. Document kinds: `supplement_of`, `part_of`, `version_of`, `related_to`; with `--artifacts`: `duplicate_of`, `derivative_of`, `replaces`, `equivalent_to` |
@@ -115,15 +116,38 @@ user's files; none exist yet). Source files are never written by any command in 
 | `collection add <name> <documents...>` | catalog | add documents to a collection |
 | `collection remove <name> <documents...>` | catalog | take documents out of a collection (they are untouched) |
 | `collection list` | read | every collection and its size |
-| `collection show <name> [--limit N]` | read | a collection's members |
+| `collection show <name> [--limit N] [--cursor C]` | read | a collection's members |
 | `collection delete <name>` | catalog | remove a collection from view; its record is kept |
 | `tag add <tag> <documents...>` | catalog | tag documents |
 | `tag remove <tag> <documents...>` | catalog | remove a tag from documents |
 | `tag list` | read | every tag and how many documents carry it |
 | `saved list` | read | saved searches |
-| `saved run <name> [--limit N]` | read | run a saved search against the library as it is now |
+| `saved run <name> [--limit N] [--cursor C]` | read | run a saved search against the library as it is now |
 | `saved delete <name>` | catalog | remove a saved search from view; its record is kept |
-| `view [name] [--limit N]` | read | a system view (`inbox`, `unresolved`, `ambiguous`, `missing`, `duplicates`, `new`, `untagged`, `uncollected`). A view is a query, not stored state; with no name, lists them |
+| `capabilities` | read | what this installation can do, for a program: the four version numbers, every command flagged read-only or not, the MCP tools, the `knowledgevista://` forms. Needs no catalog |
+| `locate <reference> [--no-disk-check]` | read | where a document or file is NOW, from a document id, a SHA-256 (or prefix), a path or a `knowledgevista://` reference: every current path, whether each is really on disk, what the library knows. The call OpenChem makes |
+| `open <reference> [--pdf-page N \| --label L] [--no-launch]` | read | hand the file to the operating system's viewer (starts a program; changes nothing in the library). The page is reported, not navigated to |
+| `mcp` | read | serve the read-only Model Context Protocol tools on stdin/stdout (no envelope: stdout carries only protocol replies) |
+| `view [name] [--limit N] [--cursor C]` | read | a system view (`inbox`, `unresolved`, `ambiguous`, `missing`, `duplicates`, `new`, `untagged`, `uncollected`). A view is a query, not stored state; with no name, lists them |
+
+## Cursors and limits
+
+A listing that has more than one page prints `"complete": false` and a `next_cursor`; pass it back as `--cursor` to get the next page. A
+cursor is opaque and belongs to the command and arguments that issued it. It records the catalog revision, so after ANY meaningful change
+to the catalog (a scan, an accepted proposal) it is `KV_CURSOR_STALE` rather than a page that might skip or repeat items; it also checks that
+the item just before the page is still the one last returned. A cursor handed to a different command or different arguments is
+`KV_INVALID_ARGUMENTS`. `--offset` still works on `review list` and `relations list` but notices nothing: prefer `--cursor`.
+
+`--limit` is between 1 and 1000 and a value outside that is refused (`KV_INVALID_ARGUMENTS`), never silently clamped; a listing cannot be
+paged past 5000 items (narrow the query instead). Listings are in a deterministic order, so the same catalog gives byte-identical output.
+
+## Integration commands
+
+`capabilities`, `locate`, `open` and `mcp` are the surface other programs use; their shapes and the `knowledgevista://` grammar are in
+[INTEGRATION.md](INTEGRATION.md), and any change to them bumps `protocol_version`. `locate` returns one record: `status` (`available`,
+`root_offline`, `missing`, `unlocated`), `available`, `document_id`, `artifact_id`, `uri`, and `locations` each with `absolute_path`,
+`root_status`, `state` and `on_disk` (`true`, `false`, or `null` when the root is offline and nothing was checked). Warning codes:
+`KV_HISTORICAL_MATCH` (a name that only matched a past location), `KV_DOCUMENT_MERGED` (a merged-away id was resolved to its survivor).
 
 `<reference>` is a document id, an artifact SHA-256 (or a unique prefix of 8+ hex characters), or a path / file
 name. A name that matches more than one document is `KV_AMBIGUOUS`; a name that only matches a *past* location is

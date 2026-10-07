@@ -13,11 +13,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from knowledgevista import __version__, cli_relations, paths
+from knowledgevista import __version__, cli_integration, cli_relations, paths
 from knowledgevista.cli_support import Outcome
 from knowledgevista.cli_support import catalog_path as _catalog_path
 from knowledgevista.cli_support import index_for as _index
 from knowledgevista.cli_support import label_of as _label
+from knowledgevista.cli_support import list_page
 from knowledgevista.cli_support import say as _say
 from knowledgevista.cli_support import search_outcome
 from knowledgevista.db.catalog import open_catalog
@@ -32,6 +33,7 @@ from knowledgevista.index.search import parse_query
 from knowledgevista.index.store import open_index
 from knowledgevista.network.policy import Fetcher, NetworkPolicy
 from knowledgevista.providers.crossref import CrossrefProvider
+from knowledgevista.services import cursor as cursormod
 from knowledgevista.services import doctor as doctor_service
 from knowledgevista.services import metadata as metadata_service
 from knowledgevista.services import organize as organize_service
@@ -384,18 +386,21 @@ def cmd_review_list(args: argparse.Namespace) -> Outcome:
     conn = open_catalog(_catalog_path(args), create=False, read_only=True)
     try:
         include = ("proposed", "set_aside", "stale", "rejected") if args.status == "all" else (args.status,)
-        items, total = review_service.queue(conn, field_=args.field, review=args.review, include=include, limit=args.limit, offset=args.offset)
+        items, total, offset, next_token = list_page(
+            conn, args, command="review list", signature=cursormod.signature_of(args.field, args.review, args.status), default_limit=25,
+            key=lambda i: i["candidate_ids"][0],
+            fetch=lambda window: review_service.queue(conn, field_=args.field, review=args.review, include=include, limit=window, offset=0))
         for item in items:
             item["label"] = _label(conn, item["document_id"])
     finally:
         conn.close()
-    out = Outcome([{"type": "summary", "total": total, "shown": len(items), "offset": args.offset}], complete=args.offset + len(items) >= total)
+    out = Outcome([{"type": "summary", "total": total, "shown": len(items), "offset": offset}], complete=offset + len(items) >= total, next_cursor=next_token)
     out.records += [{"type": "item", **i} for i in items]
     for i in items:
         hint = f"   [differs from accepted: {i['differs_from_accepted']}]" if i["differs_from_accepted"] else ""
         out.lines.append(f"{i['candidate_ids'][0][:10]}  {i['field']:9} {i['confidence']:9} {i['review']:8} {i['display'][:70]}{hint}\n"
                          f"             {i['label']}  <- {', '.join(i['sources'])}")
-    out.lines.append(f"{len(items)} of {total} item(s)" + ("" if out.complete else f" (use --offset {args.offset + len(items)} for more)"))
+    out.lines.append(f"{len(items)} of {total} item(s)" + ("" if out.complete else f" (continue with --cursor {next_token})"))
     return out
 
 
@@ -530,6 +535,7 @@ def build_parser(json_mode: bool = False) -> _Parser:
     search.add_argument("--also", action="append", default=[], help="also somewhere on the same page (repeatable)")
     search.add_argument("--file", help="only files whose path contains this")
     search.add_argument("--limit", type=int, default=20)
+    search.add_argument("--cursor", help="continue from the `next_cursor` of the previous page")
     search.add_argument("--save", metavar="NAME", help="also save this query (the parsed query, never its results) under a name: kv saved run NAME")
     search.add_argument("--replace", action="store_true", help="with --save: overwrite a saved search of that name")
     search.set_defaults(handler=cmd_search)
@@ -569,7 +575,8 @@ def build_parser(json_mode: bool = False) -> _Parser:
     rev_list.add_argument("--review", choices=("safe", "required"), help="only proposals the batch rule may accept / only those a person must")
     rev_list.add_argument("--status", choices=("proposed", "set_aside", "stale", "rejected", "all"), default="proposed")
     rev_list.add_argument("--limit", type=int, default=25)
-    rev_list.add_argument("--offset", type=int, default=0)
+    rev_list.add_argument("--offset", type=int, default=0, help="skip this many items (prefer --cursor: it notices when the queue changed)")
+    rev_list.add_argument("--cursor", help="continue from the `next_cursor` of the previous page")
     rev_list.set_defaults(handler=cmd_review_list)
     rev_accept = rev_sub.add_parser("accept", parents=[shared], help="accept proposals (ids from `review list`), or --safe for the batch rule")
     rev_accept.add_argument("candidates", nargs="*", help="candidate ids (8+ characters)")
@@ -603,6 +610,7 @@ def build_parser(json_mode: bool = False) -> _Parser:
     cfg_set.set_defaults(handler=cmd_config)
 
     cli_relations.add_parsers(sub, shared, lambda **kw: _Sub(json_mode, **kw))
+    cli_integration.add_parsers(sub, shared, lambda **kw: _Sub(json_mode, **kw))
     return parser
 
 
@@ -649,7 +657,10 @@ def main(argv: list[str] | None = None) -> int:
         error = KvError(ErrorCode.INTERNAL, f"{type(exc).__name__}: {exc}")
         _emit(Envelope(command, ok=False, errors=[error.as_dict()]), json_mode, [])
         return EXIT_FAILURE
-    envelope = Envelope(command, ok=outcome.ok, records=outcome.records, warnings=outcome.warnings, errors=outcome.errors, complete=outcome.complete)
+    if outcome.silent:
+        return EXIT_OK
+    envelope = Envelope(command, ok=outcome.ok, records=outcome.records, warnings=outcome.warnings, errors=outcome.errors, complete=outcome.complete,
+                        next_cursor=outcome.next_cursor)
     _emit(envelope, json_mode, outcome.lines)
     if outcome.ok:
         return EXIT_OK

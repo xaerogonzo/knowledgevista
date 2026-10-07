@@ -20,6 +20,8 @@ being folded into the plan; an entry reopens the architecture only if it contrad
 | `kv backup` / `kv restore` convenience | users ask; `kv export` and the migration backup cover the need until then |
 | Read-status and reading-list entities | a "To Read" collection stops being enough |
 | Hard-link browse folder | a concrete workflow needs it. A hard link is the same file: editing it edits the original, so it would be labelled that way |
+| A migration script that rewrites OpenChem's recorded `file` names from the organizer journal | the reversible organizer (milestone 6) exists and has renamed a held file; until then `kv locate` by hash covers a moved file |
+| Page-targeted open in an external viewer | the built-in reader (milestone 8) exists; an arbitrary default viewer cannot be told which page |
 | Per-root policies beyond `allow_organize` | multiple roots with different needs exist |
 | Chemistry-aware search normalisation | opt-in only; default search never rewrites scientific terms |
 | More metadata providers (OpenAlex, Open Library, arXiv, DataCite) | a library has many documents Crossref has no record of (the real one: books, theses, old reports). The `MetadataProvider` protocol and the state/cache/pacing rules already exist; a provider is a normaliser plus a URL |

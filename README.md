@@ -33,7 +33,7 @@ first, and reversible.
 See [docs/INVARIANTS.md](docs/INVARIANTS.md), [docs/SAFETY_MODEL.md](docs/SAFETY_MODEL.md) and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Try it (milestones 1 to 4)
+## Try it (milestones 1 to 5)
 
 ```bash
 uv sync --extra extract        # PyMuPDF, needed only to read PDF text
@@ -77,9 +77,17 @@ uv run kv search "solubility tag:toxicology year:2015-"   # filters read accepte
 uv run kv view inbox           # what needs a person first
 ```
 
+Let other programs ask where a paper is (nothing here writes anything):
+
+```bash
+uv run kv locate 3fa9c2d1                     # a hash prefix, document id, name or knowledgevista:// reference -> the current path, checked on disk
+uv run kv capabilities --json                 # versions, which commands only read, the MCP tools; needs no catalog
+uv run kv mcp                                 # read-only Model Context Protocol server on stdin/stdout for a coding assistant
+```
+
 Add `--json` for machine output (see [docs/CLI_CONTRACT.md](docs/CLI_CONTRACT.md)); [docs/SEARCH.md](docs/SEARCH.md) says
 exactly what search does and does not do, and [docs/METADATA.md](docs/METADATA.md) what a proposal is, how a DOI is judged to be
-a document's own, and what the batch rule may and may not do; [docs/RELATIONS.md](docs/RELATIONS.md) says what a relation, a duplicate and a merge are. Nothing here writes to your folders.
+a document's own, and what the batch rule may and may not do; [docs/RELATIONS.md](docs/RELATIONS.md) says what a relation, a duplicate and a merge are, [docs/INTEGRATION.md](docs/INTEGRATION.md) what another program may rely on, and [docs/MCP.md](docs/MCP.md) what the assistant server can and cannot do. Nothing here writes to your folders.
 
 ## Develop
 

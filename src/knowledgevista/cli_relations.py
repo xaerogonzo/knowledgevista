@@ -10,10 +10,11 @@ from collections.abc import Callable
 from typing import Any
 
 from knowledgevista import paths
-from knowledgevista.cli_support import Outcome, catalog_path, index_for, label_of, search_outcome
+from knowledgevista.cli_support import Outcome, catalog_path, index_for, label_of, list_page, search_outcome
 from knowledgevista.db.catalog import open_catalog
 from knowledgevista.errors import ErrorCode, KvError
 from knowledgevista.index.metacache import open_metacache
+from knowledgevista.services import cursor as cursormod
 from knowledgevista.services import explain as explain_service
 from knowledgevista.services import organize, relate, relations
 from knowledgevista.services import resolve as resolve_service
@@ -138,9 +139,12 @@ def cmd_relations(args: argparse.Namespace) -> Outcome:
     try:
         if action == "list":
             statuses = ("proposed", "stale", "rejected", "accepted") if args.status == "all" else (args.status,)
-            items, total = relate.list_candidates(conn, kind=args.kind, statuses=statuses, limit=args.limit, offset=args.offset)
-            out.complete = args.offset + len(items) >= total
-            out.records.append({"type": "summary", "total": total, "shown": len(items), "offset": args.offset})
+            items, total, offset, out.next_cursor = list_page(
+                conn, args, command="relations list", signature=cursormod.signature_of(args.kind, args.status), default_limit=25,
+                key=lambda i: i["candidate_id"],
+                fetch=lambda window: relate.list_candidates(conn, kind=args.kind, statuses=statuses, limit=window, offset=0))
+            out.complete = offset + len(items) >= total
+            out.records.append({"type": "summary", "total": total, "shown": len(items), "offset": offset})
             for item in items:
                 ends = item["members"] if item["members"] is not None else [item["source"], item["target"]]
                 item["labels"] = [label_of(conn, e) if len(e) == 32 else e[:12] for e in ends[:3]]
@@ -148,7 +152,7 @@ def cmd_relations(args: argparse.Namespace) -> Outcome:
                 what = (f"{len(item['members'])} documents: " if item["members"] is not None else "") + " -> ".join(item["labels"]) + (" ..." if item["members"] and len(item["members"]) > 3 else "")
                 why = item["evidence"].get("reason") or ", ".join(item["evidence"].get("signals", [])) or item["evidence"].get("doi") or item["evidence"].get("text_fingerprint", "")
                 out.lines.append(f"{item['candidate_id'][:10]}  {item['kind']:14} {item['confidence']:9} {item['level']:8} {what}\n             {why}")
-            out.lines.append(f"{len(items)} of {total} proposal(s)" + ("" if out.complete else f" (use --offset {args.offset + len(items)} for more)"))
+            out.lines.append(f"{len(items)} of {total} proposal(s)" + ("" if out.complete else f" (continue with --cursor {out.next_cursor})"))
         elif action == "accept":
             for reference in args.candidates:
                 candidate_id = relations.resolve_candidate_id(conn, reference)
@@ -239,12 +243,15 @@ def cmd_collection(args: argparse.Namespace) -> Outcome:
             out.lines = [f"{c['members']:5}  {c['name']}" + (f"   (parent DOI {c['source_doi']})" if c["source_doi"] else "") for c in listed] or ["No collections yet. Create one: kv collection create <name> [documents]"]
             return out
         collection, ids = organize.collection_members(conn, args.name)
-        out = Outcome([{"type": "collection", "collection_id": collection["collection_id"], "name": collection["name"], "members": len(ids)}])
-        for document_id in ids[: args.limit]:
+        shown, total, offset, next_token = list_page(
+            conn, args, command="collection show", signature=cursormod.signature_of(collection["collection_id"]), default_limit=50,
+            key=lambda d: d, fetch=lambda window: (ids[:window], len(ids)))
+        out = Outcome([{"type": "collection", "collection_id": collection["collection_id"], "name": collection["name"], "members": len(ids), "offset": offset}],
+                      complete=offset + len(shown) >= total, next_cursor=next_token)
+        for document_id in shown:
             out.records.append({"type": "member", "document_id": document_id, "label": label_of(conn, document_id)})
             out.lines.append(label_of(conn, document_id))
-        out.complete = len(ids) <= args.limit
-        out.lines.append(f"{min(len(ids), args.limit)} of {len(ids)} member(s) of {collection['name']!r}")
+        out.lines.append(f"{len(shown)} of {len(ids)} member(s) of {collection['name']!r}" + ("" if out.complete else f" (continue with --cursor {next_token})"))
         return out
     finally:
         conn.close()
@@ -281,7 +288,7 @@ def cmd_saved(args: argparse.Namespace) -> Outcome:
         _, query = organize.get_saved_search(conn, args.name)
     finally:
         conn.close()
-    return search_outcome(args, query)
+    return search_outcome(args, query, command="saved run")
 
 
 def cmd_view(args: argparse.Namespace) -> Outcome:
@@ -292,17 +299,19 @@ def cmd_view(args: argparse.Namespace) -> Outcome:
             return Outcome([{"type": "view", "name": n, "description": d} for n, (d, _) in organize.VIEWS.items()],
                            lines=[f"{n:12} {d}" for n, (d, _) in organize.VIEWS.items()])
         items = organize.run_view(conn, index, args.name)
-        shown = items[: args.limit]
+        shown, total, offset, next_token = list_page(
+            conn, args, command="view", signature=cursormod.signature_of(args.name), default_limit=50,
+            key=lambda i: i["document_id"], fetch=lambda window: (items[:window], len(items)))
         for item in shown:
             item["label"] = label_of(conn, item["document_id"])
     finally:
         conn.close()
         if index is not None:
             index.close()
-    out = Outcome([{"type": "summary", "view": args.name, "total": len(items), "shown": len(shown)}], complete=len(items) <= args.limit)
+    out = Outcome([{"type": "summary", "view": args.name, "total": total, "shown": len(shown), "offset": offset}], complete=offset + len(shown) >= total, next_cursor=next_token)
     out.records += [{"type": "item", **i} for i in shown]
     out.lines = [f"{i['label']}   [{i['reason']}] {i['detail']}" for i in shown]
-    out.lines.append(f"{len(shown)} of {len(items)} in {args.name}" + ("" if out.complete else f" (limit {args.limit})"))
+    out.lines.append(f"{len(shown)} of {total} in {args.name}" + ("" if out.complete else f" (continue with --cursor {next_token})"))
     return out
 
 
@@ -322,7 +331,8 @@ def add_parsers(sub: Any, shared: argparse.ArgumentParser, make_parser: Callable
     lst.add_argument("--kind", choices=relations.ARTIFACT_KINDS + relations.DOCUMENT_KINDS + ("same_document", "collection"))
     lst.add_argument("--status", choices=("proposed", "stale", "rejected", "accepted", "all"), default="proposed")
     lst.add_argument("--limit", type=int, default=25)
-    lst.add_argument("--offset", type=int, default=0)
+    lst.add_argument("--offset", type=int, default=0, help="skip this many (prefer --cursor: it notices when the proposals changed)")
+    lst.add_argument("--cursor", help="continue from the `next_cursor` of the previous page")
     lst.set_defaults(handler=cmd_relations)
     acc = rel_sub.add_parser("accept", parents=[shared], help="accept proposals (a same_document proposal MERGES the two documents)")
     acc.add_argument("candidates", nargs="+")
@@ -376,6 +386,7 @@ def add_parsers(sub: Any, shared: argparse.ArgumentParser, make_parser: Callable
     show = col_sub.add_parser("show", parents=[shared], help="the members of a collection")
     show.add_argument("name")
     show.add_argument("--limit", type=int, default=50)
+    show.add_argument("--cursor", help="continue from the `next_cursor` of the previous page")
     show.set_defaults(handler=cmd_collection)
     delete = col_sub.add_parser("delete", parents=[shared], help="delete a collection from view (the record is kept)")
     delete.add_argument("name")
@@ -396,6 +407,7 @@ def add_parsers(sub: Any, shared: argparse.ArgumentParser, make_parser: Callable
     run = saved_sub.add_parser("run", parents=[shared], help="run a saved search against the library as it is now")
     run.add_argument("name")
     run.add_argument("--limit", type=int, default=20)
+    run.add_argument("--cursor", help="continue from the `next_cursor` of the previous page")
     run.set_defaults(handler=cmd_saved)
     drop = saved_sub.add_parser("delete", parents=[shared], help="delete a saved search from view (the record is kept)")
     drop.add_argument("name")
@@ -404,4 +416,5 @@ def add_parsers(sub: Any, shared: argparse.ArgumentParser, make_parser: Callable
     view = sub.add_parser("view", parents=[shared], help="system views (inbox, unresolved, missing, duplicates, ...): queries, not stored state")
     view.add_argument("name", nargs="?", help="a view name; omit to list them")
     view.add_argument("--limit", type=int, default=50)
+    view.add_argument("--cursor", help="continue from the `next_cursor` of the previous page")
     view.set_defaults(handler=cmd_view)

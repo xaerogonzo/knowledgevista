@@ -13,11 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from knowledgevista import paths
-from knowledgevista.db.catalog import open_catalog
+from knowledgevista.db.catalog import open_catalog, revision
 from knowledgevista.errors import ErrorCode, KvError
 from knowledgevista.index.search import Query
 from knowledgevista.index.store import open_index
-from knowledgevista.services import search as search_service
+from knowledgevista.services import cursor as cursormod
+from knowledgevista.services import search_page as search_page_service
 
 
 @dataclass
@@ -27,6 +28,8 @@ class Outcome:
     errors: list[dict[str, Any]] = field(default_factory=list)
     lines: list[str] = field(default_factory=list)  # the human rendering
     complete: bool = True  # False when the records are a truncated view of a larger result
+    silent: bool = False  # the command spoke on stdout itself (the MCP server): print no envelope
+    next_cursor: str | None = None  # the token that continues a truncated listing (services/cursor.py)
 
     @property
     def ok(self) -> bool:
@@ -55,18 +58,41 @@ def label_of(conn, document_id: str) -> str:
     return row[0] if row else document_id[:12]
 
 
-def search_outcome(args: argparse.Namespace, query: Query) -> Outcome:
+def list_page(conn, args: argparse.Namespace, *, command: str, signature: str, key, fetch, default_limit: int):
+    """One page of an ordered listing, continued from `--cursor` (or the older `--offset`).
+
+    `fetch(window)` returns (the first `window` items in listing order, the total); `key(item)` is a stable id for an item. The
+    cursor is checked against the catalog revision and the item just before the page (services/cursor.py), so a page is either
+    exactly the continuation or `KV_CURSOR_STALE`. Returns (shown, total, offset, next_cursor)."""
+    limit = cursormod.bounded_limit(getattr(args, "limit", None), default_limit)
+    token, explicit = getattr(args, "cursor", None), getattr(args, "offset", 0) or 0
+    if token is not None and explicit:
+        raise KvError(ErrorCode.INVALID_ARGUMENTS, "Give --cursor or --offset, not both.")
+    rev = revision(conn)
+    offset = cursormod.start_offset(token, command=command, signature=signature, revision=rev, fallback_offset=explicit)
+    if offset + limit > cursormod.MAX_WINDOW:
+        raise KvError(ErrorCode.INVALID_ARGUMENTS, f"A listing cannot be paged past {cursormod.MAX_WINDOW} items; narrow it.", {"offset": offset, "limit": limit})
+    items, total = fetch(offset + limit)
+    if token is not None:
+        cursormod.check_anchor(cursormod.decode(token), [key(i) for i in items])
+    shown = items[offset: offset + limit]
+    nxt = cursormod.next_cursor(command=command, signature=signature, revision=rev, offset=offset, shown=len(shown),
+                                last_key=key(shown[-1]) if shown else None, more=offset + len(shown) < total)
+    return shown, total, offset, nxt
+
+
+def search_outcome(args: argparse.Namespace, query: Query, command: str = "search") -> Outcome:
     """Run a parsed query against the library and render it: the summary with coverage, then the hits."""
     conn = open_catalog(catalog_path(args), create=False, read_only=True)
     index = index_for(args, create=False, read_only=True)
     try:
-        result = search_service.search(conn, index, query, limit=args.limit)
+        result, next_token = search_page_service.search_page(conn, index, query, limit=args.limit, token=getattr(args, "cursor", None), command=command)
     finally:
         conn.close()
         if index is not None:
             index.close()
     cov = result.coverage
-    out = Outcome(complete=not result.truncated)
+    out = Outcome(complete=not result.truncated, next_cursor=next_token)
     out.records.append({
         "type": "summary",
         "query": {"alternatives": list(query.alternatives), "near": list(query.near), "within": query.within,
@@ -91,7 +117,7 @@ def search_outcome(args: argparse.Namespace, query: Query) -> Outcome:
         label = f" [{hit['printed_label']}]" if hit["printed_label"] else ""
         provisional = "  (provisional)" if hit["extraction"]["provisional"] else ""
         out.lines.append(f"{where}  p{hit['pdf_page']}{label}{provisional}\n    {' '.join(hit['snippet'].split())}")
-    out.lines.append(f"{len(result.hits)} page(s)" + (f" (limit {args.limit}; more exist)" if result.truncated else ""))
+    out.lines.append(f"{len(result.hits)} page(s)" + (f" (limit {args.limit}; more exist; continue with --cursor {next_token})" if next_token else ""))
     if result.scope is not None:
         out.lines.append(f"  filters {' '.join(f'{n}:{v}' for n, v in result.scope['filters'])} selected {result.scope['documents_matching']} document(s); "
                          "only those were searched. Filters read accepted metadata, tags and collections, never a proposal.")
