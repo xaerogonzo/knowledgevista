@@ -123,8 +123,14 @@ def verify_work(work: dict[str, Any], text: str, local_titles: list[str] | None 
         reasons.append("the title is printed but no author of the record appears")
 
     title_equal = printed and layout_same is not False
-    if title_equal and (found >= 1 or total == 0) and not conflict:
+    # Evidence that cannot disagree is not evidence: a record with no authors (a book) and a file with no layout title to compare
+    # (measured: ten documents "confirmed" as the encyclopedia itself because its title is printed in every page footer) has
+    # nothing that could have contradicted the match. Either an author on the page or a matching layout title must back it.
+    backed = found >= 1 or (total == 0 and layout_same is True)
+    if title_equal and backed and not conflict:
         return Verdict("exact", components, reasons)
+    if title_equal and total == 0:
+        reasons.append("the record has no authors, and no title read from the file's layout confirms it")
     if (printed or contained >= STRONG_CONTAINMENT) and found >= 1:
         return Verdict("strong", components, reasons)
     if contained >= WEAK_CONTAINMENT or found >= 2 or printed:

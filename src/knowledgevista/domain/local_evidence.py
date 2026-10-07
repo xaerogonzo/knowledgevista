@@ -144,7 +144,8 @@ def _title_specs(facts: FrontFacts, text: str, filename_stem: str | None) -> lis
                            if other == source or titles.similarity(value, other_value) >= TITLE_AGREEMENT})
         independent = [s for s in agreeing if s != "filename_hint"]
         printed = titles.is_printed(value, text)
-        if source == "filename_hint":
+        garbled = titles.looks_garbled(value)
+        if source == "filename_hint" or garbled:
             confidence = "low"
         elif printed and len(independent) >= 2:
             confidence = "high"
@@ -152,10 +153,10 @@ def _title_specs(facts: FrontFacts, text: str, filename_stem: str | None) -> lis
             confidence = "medium" if printed else "low"
         specs.append(CandidateSpec(
             field="title", value=value, origin="observed", source=source, evidence_key=evidence_key("title", source, titles.alnum_key(value)),
-            evidence={**extra, "printed_on_first_pages": printed, "agreeing_sources": agreeing, "dropped": facts.dropped},
+            evidence={**extra, "printed_on_first_pages": printed, "agreeing_sources": agreeing, "dropped": facts.dropped, "looks_garbled": garbled},
             # Safe needs the page's own layout among the agreeing sources: a file's Title and XMP are often one value copied from
             # one place, and two copies of junk (measured: both `doi:10.1016/...`) are not two witnesses.
-            confidence=confidence, review="safe" if printed and len(independent) >= 2 and "layout_title" in independent else "required",
+            confidence=confidence, review="safe" if printed and len(independent) >= 2 and "layout_title" in independent and not garbled else "required",
             priority=20,
         ))
     return specs

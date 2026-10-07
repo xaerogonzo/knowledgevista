@@ -362,6 +362,13 @@ def _online_metadata_stage(catalog: sqlite3.Connection, doc: _Document, online: 
         result = online.provider.lookup_doi(doi)
         _note(report, online, result)
         _bump(report["online"], "dois_checked")
+        if result.state == LookupState.NO_MATCH:
+            # Accepted earlier (by local evidence, before a provider was asked) and the provider has never heard of it: a misread
+            # DOI, or one registered elsewhere. Never undone automatically; said, so a person looks.
+            _bump(report["online"], "accepted_doi_unknown_to_provider")
+            report["problems"].append({"document_id": doc.document_id, "message": f"the accepted DOI {doi} is not known to the provider "
+                                       "(a misread DOI, or one registered elsewhere); check it: kv explain"})
+            return
         if result.state != LookupState.SUCCESS:
             online.failed.add(doi)
             return
@@ -371,6 +378,12 @@ def _online_metadata_stage(catalog: sqlite3.Connection, doc: _Document, online: 
         _bump(report["online"], "accepted_doi_contradicted")
         report["problems"].append({"document_id": doc.document_id, "message": f"the accepted DOI {doi}'s record does not match the document; no metadata was proposed from it"})
         return
+    if verdict.level == "weak" and accepted["accepted_by"].startswith("rule:"):
+        # Accepted on local evidence alone, and the provider's record fits the pages only weakly (a PDF that opens on its
+        # reference list, a wrong DOI). Not undone; said, so a person looks.
+        _bump(report["online"], "accepted_doi_weak")
+        report["problems"].append({"document_id": doc.document_id, "message": f"the accepted DOI {doi} was accepted by a rule and its provider record "
+                                   "only weakly matches the document's first pages; check it: kv explain"})
     _bump(report["online"], "metadata_documents")
     _apply(catalog, doc, _work_specs(work, verdict), run_id, stale_sources=None)
 

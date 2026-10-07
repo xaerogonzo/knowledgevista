@@ -317,3 +317,18 @@ def test_a_doi_only_in_the_references_that_the_files_own_metadata_also_names_is_
     claimed = classify_dois(pages, metadata_dois=[OTHER.upper()])
     assert [(c.doi, c.classification, c.components) for c in claimed.candidates] == [(OTHER, "ambiguous", {"in_pdf_metadata": 2})]
     assert claimed.in_bibliography == 0  # it is not also counted as a reference-only DOI
+
+
+def test_typographic_ligatures_in_a_printed_doi_are_folded_to_the_ascii_it_is_registered_in():
+    """Measured: `10.1016/j.\ufb02uid.2015.09.014` was accepted as a DOI; no provider has it, the real one is `j.fluid`."""
+    assert doimod.normalise_doi("10.5555/kv.\ufb02uid.\ufb01rst.0001") == "10.5555/kv.fluid.first.0001"
+    (found,) = doimod.find_dois("Cite: 10.5555/kv.\ufb02uid.0001. Received")
+    assert found.doi == "10.5555/kv.fluid.0001"
+    assert doimod.normalise_doi(doimod.normalise_doi("10.5555/kv.\ufb02uid.0001")) == "10.5555/kv.fluid.0001"
+
+
+def test_letter_spaced_scan_output_is_not_a_title_but_single_letters_in_a_real_title_are():
+    assert titles.looks_garbled("T H E E F F E C T OF PALFIUMB, (2,2-DIPHENYL- 3 - M E T H Y L - 4- M 0 R P H 0 L I N 0 - B U T")
+    assert titles.looks_garbled("S T U D I E S ON SOMETHING")
+    for fine in ("Vitamin B 12 in Phase A and B Trials", "Thermochemistry of Uracil, Thymine, Cytosine, and Adenine", "A Study of X in Y", ""):
+        assert not titles.looks_garbled(fine), fine

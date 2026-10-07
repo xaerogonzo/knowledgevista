@@ -193,3 +193,11 @@ def test_a_wrapped_doi_is_not_safe_even_when_it_would_score_enough_anyway():
 def test_a_wrong_isbn_10_check_digit_is_ignored_like_a_wrong_isbn_13():
     page = "ISBN-10: 0-306-40615-2\nISBN 0-306-40615-3 (typo)\n"
     assert [s.value for s in by(local_specs([(1, "Title"), (4, page)], 4, None), "isbn")] == ["0306406152"]
+
+
+def test_a_letter_spaced_title_that_two_sources_agree_on_is_still_not_safe():
+    garbled = "T H E E F F E C T OF SOMETHING ON SOMETHING ELSE ENTIRELY"
+    page = f"Journal\n{garbled}\nA. Author\n"
+    result = local_specs([(1, page), (2, "x")], 2, facts(layout_title=TitleGuess(garbled, 20.0, 10.0, 1), info_title=garbled), "x")
+    titles_ = by(result, "title")
+    assert titles_ and all(t.review == "required" and t.confidence == "low" and t.evidence["looks_garbled"] for t in titles_)

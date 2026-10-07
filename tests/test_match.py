@@ -132,3 +132,28 @@ def test_a_search_result_titled_differently_is_never_a_candidate_however_it_rank
 def test_a_search_result_titled_alike_but_not_verified_by_the_pages_is_not_a_candidate():
     stranger = work(doi="10.5555/kv.match.stranger", authors=[{"family": "Differentperson", "given": "D.", "name": None}])
     assert choose_search_match([stranger], TITLE, PAGE, [TITLE]).chosen is None
+
+
+# ------------------------------------------------------------------------- found by the full run on a real library
+
+
+BOOK = work(title="Encyclopedia of the Imaginary Sciences", authors=[], year=2011, years={"issued": 2011, "print": None, "online": None},
+            type="reference-book")
+ENTRY_PAGE = "T Scores\nGRANT IVERSON\nUniversity of Nowhere\nJohn Doe, Jane Roe (eds.), Encyclopedia of the Imaginary Sciences, DOI 10.5555/kv.book\n2011\n"
+
+
+def test_a_book_record_with_no_authors_is_not_exact_for_an_entry_whose_footer_prints_the_books_title():
+    """Ten documents were 'confirmed' as the whole encyclopedia: no authors to check, no layout title to disagree with."""
+    no_layout = verify_work(BOOK, ENTRY_PAGE, [])
+    assert no_layout.level != "exact" and any("no authors" in r for r in no_layout.reasons)
+    short_layout = verify_work(BOOK, ENTRY_PAGE, ["T Scores"])  # the entry's own title: not the book's
+    assert short_layout.level != "exact"
+
+
+def test_the_same_book_record_is_exact_for_the_book_itself_because_the_layout_title_confirms_it():
+    page = "Encyclopedia of the Imaginary Sciences\nJohn Doe, Jane Roe (eds.)\n2011\n"
+    assert verify_work(BOOK, page, ["Encyclopedia of the Imaginary Sciences"]).level == "exact"
+
+
+def test_an_author_on_the_page_still_backs_a_match_when_no_layout_title_was_found():
+    assert verify_work(work(), PAGE, []).level == "exact"

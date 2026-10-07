@@ -10,7 +10,7 @@
   recorded rule (`safe_batch_v1`) to proposals that earned `safe`; `kv metadata set/clear/lock/unlock` states a value by hand. Rerunning changes
   nothing; a provider outage changes no accepted value and the run resumes from a cache of definite answers. `explain`, `stats` and `doctor` cover
   metadata, and every PDF is either titled or in a stated state. See docs/METADATA.md.
-- The plan's 66% DOI-coverage target is restated: it came from a figure that counted one encyclopedia's DOI as each of its 160 entries' (docs/ARCHITECTURE.md).
+- The plan's 66% DOI-coverage target is restated: it came from a figure that counted one encyclopedia's DOI as each of its 160 entries' (docs/ARCHITECTURE.md). A full online run over the real 727-PDF library accepted 393 correct DOIs (54%; 69% of the PDFs that are not entries of that encyclopedia) and 360 titles, and found, after the 80-document sample had passed, a matcher hole (a book record with no authors and a file with no layout title could be `exact`), a ligature inside an accepted DOI, and a letter-spaced scan accepted as a title; all fixed and tested (docs/METADATA.md).
 - `kv extract`'s worker gained a `front` request (Info, XMP and first-page layout) used only by `resolve`.
 
 - Milestone 2: text extraction and search. `kv extract` reads PDF text in a separate, killable worker process

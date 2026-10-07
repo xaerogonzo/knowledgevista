@@ -19,6 +19,7 @@ it can be accepted, so this costs a missed match, never a wrong one.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 # A control character (measured: a stray \x04 ended one real DOI) or an invisible one ends a DOI like a space does.
@@ -45,7 +46,9 @@ def normalise_doi(raw: str | None) -> str | None:
     """The canonical spelling of a DOI, or None if `raw` is not one. Idempotent: `f(f(x)) == f(x)`."""
     if not raw:
         return None
-    text = _PREFIX.sub("", raw.strip())
+    # PDF text carries typographic ligatures (measured: `j.ﬂuid` for `j.fluid`, which no provider knows); NFKC folds them and
+    # the full-width and compatibility forms to the ASCII a DOI is registered in.
+    text = _PREFIX.sub("", unicodedata.normalize("NFKC", raw).strip())
     changed = True
     while changed:
         changed = False

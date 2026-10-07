@@ -107,6 +107,20 @@ def is_junk_title(title: str | None, filename_stem: str | None = None) -> bool:
     return False
 
 
+#: A run of this many one-character words is letter-spacing ("T H E E F F E C T"), the signature of a scanned page's text layer.
+GARBLED_RUN = 4
+
+
+def looks_garbled(text: str) -> bool:
+    """Whether a title reads like letter-spaced scan output rather than words. A title can have single letters ("Vitamin B 12",
+    "Phase A and B"), but not a run of four or more in a row; such a string is a transcription of the print, not a title."""
+    run = longest = 0
+    for token in (text or "").split():
+        run = run + 1 if len(token) == 1 and token.isalnum() else 0
+        longest = max(longest, run)
+    return longest >= GARBLED_RUN
+
+
 def filename_title_hint(stem: str) -> str | None:
     """A name that reads like a title (three or more alphabetic words), else None. `cm4c01978` and `kaya2022` are
     locators, not titles; `Hansen solubility parameters handbook` is a hint. Always labelled `filename_hint`."""

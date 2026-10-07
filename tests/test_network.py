@@ -416,3 +416,12 @@ def test_a_no_match_expires_sooner_than_a_match_because_a_work_can_be_registered
     expires = {r["cache_key"]: r["expires_at"] for r in store.execute("SELECT cache_key, expires_at FROM response")}
     assert expires["miss"] < expires["hit"]
     assert metacache.NO_MATCH_TTL < metacache.SUCCESS_TTL
+
+
+def test_a_title_search_result_also_answers_the_lookup_of_its_own_doi(crossref, tmp_path):
+    crossref.script["/works?"] = [(200, {}, json.dumps({"status": "ok", "message-type": "work-list", "message": {"items": [WORK]}}).encode(), 0)]
+    provider, _ = real_provider(crossref, tmp_path)
+    provider.search_title("Cu2O Solubility: An Invented Study of Considerable Length")
+    hits = len(crossref.hits)
+    looked_up = provider.lookup_doi(DOI)
+    assert looked_up.from_cache and looked_up.work["title"].startswith("Cu2O") and len(crossref.hits) == hits  # no second request

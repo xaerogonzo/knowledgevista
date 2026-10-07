@@ -120,22 +120,33 @@ Each line below was measured on a real 727-PDF library (private; nothing from it
   DOI, which the old signal recorded as each entry's own. Excluding them, 318 PDFs print a DOI that is theirs; a further
   25 or so are undecided and the rest print none (books, old reports, scans). "Above 66%" could only have been reached by
   accepting 160 wrong DOIs, so the target is restated as *correct* accepted DOIs.
-- **Local evidence alone** accepted 240 DOIs (33%) with no network, by the safe rule, and 68 titles.
-- **A random sample of 80 documents went to Crossref** (57 requests, 29 s, no contact address, nothing else sent). All 40 accepted
-  DOIs and all 35 accepted titles were read against the printed first page by hand: none wrong. Of the 55 DOI checks 29 were
-  `exact`, 5 `strong` and 19 `weak`; the 19 were all the one encyclopedia DOI. Eight documents with no printed DOI were found by
-  title search and all eight were right. Re-running the sample sent nothing and changed nothing.
-- **Estimate for the whole library, with its limits:** about half of the PDFs (roughly 45-52%) can end up with a correct accepted
-  DOI after a full online run (240 from the file itself, about 60 more confirmed by Crossref, about 40 found by title). It is an
-  extrapolation from 80 documents; the full run has not been made, because it sends several hundred DOIs and titles from the
-  user's library and that is the user's decision (`kv resolve --online --list-requests` shows them first).
+- **Local evidence alone** accepted 264 DOIs (36%) with no network, by the safe rule, and about 68 titles.
+- **The full online run** (the user's decision, 2026-10-07; no contact address, nothing sent but DOIs and titles): 512 DOI lookups and
+  313 title searches, 438 of them live requests (the rest answered from the cache of an earlier 80-document sample), 4 minutes,
+  never stopped. Result: **393 of 727 PDFs (54%) have an accepted DOI** and 360 an accepted title; 355 have authors and 356 a year and
+  a journal. By source: 264 from the file itself, 56 confirmed by Crossref (`exact`), 73 found by title. Of the 567 PDFs that are not
+  entries of the encyclopedia (which have no DOI of their own), that is 69%. The remaining titles wait in the review queue
+  (316 proposed and waiting, 47 with nothing that looked like a title, 4 scans). A settled library asks nothing: the third and fourth
+  runs made 0 requests and changed nothing.
+- **Hand-checked.** The 40 DOIs and 35 titles of the first sample, and then all 74 DOIs found by title search, against the printed first
+  page: none wrong. Every one of the 264 locally accepted DOIs was re-run through the matcher against its Crossref record: 224 `exact`,
+  36 `strong`, one unknown to Crossref (a typographic ligature, see below) and one `weak` (a Science paper whose PDF opens on its reference
+  list); the last is reported by `resolve` as a problem and left for a person.
+- **What the full run caught**, after the sample had passed: (1) ten documents were "confirmed" as the encyclopedia itself, because a
+  book record has no authors and those files have no layout title, so nothing could have contradicted the match; an `exact` verdict now needs
+  an author on the page, or a layout title that matches. (2) A DOI carried a typographic ligature from the PDF text (`j.ﬂuid`) and was
+  accepted before any provider had been asked; DOIs are NFKC-normalised, and an accepted DOI a provider does not know, or only weakly matches,
+  is now reported. (3) One title was a letter-spaced scan transcription (`T H E E F F E C T ...`); a run of four single-character words is
+  never safe. (4) Documents found by title cost a second request each next run to fetch what the search had already delivered; a search result
+  now also answers its own DOI lookup. Known limit: titles read from a scanned page's text layer inherit its OCR errors (a Roman numeral
+  read as `11.`), and only a provider's `exact` match can replace them.
 - **What the hand-check caught.** The first sample accepted two wrong titles (`doi:10.1016/...`: the XMP and Info titles of two
   papers both held the DOI, so two "independent" sources agreed on junk). That is why identifier-shaped titles are rejected and a
   safe title needs the layout among its sources. It also found 44 documents whose safe titles differed only by a non-breaking
   hyphen or a curly apostrophe, which the rule had read as a disagreement; same-words titles now agree.
-- **Mutation testing.** 87 faults planted one at a time in the new code (a threshold, a cue window, the shared-DOI check, the
+- **Mutation testing.** 100 faults planted one at a time in the new code (a threshold, a cue window, the shared-DOI check, the
   offline switch, a cached failure, a dropped lock, an upgrade that ignores who accepted the value...). The first sweep let eight
-  survive: six were missing tests, one was a clause that could never matter (removed), one a missing check; all are now caught. Four more were planted after the last change (typographic agreement, the request counter) and caught.
+  survive: six were missing tests, one was a clause that could never matter (removed), one a missing check; all are now caught. Thirteen more were planted after later changes (typographic agreement, the request counter, the fixes above) and all were caught.
 
 ## What comes next
 

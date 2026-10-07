@@ -117,6 +117,10 @@ class CrossrefProvider:
         items = [w for w in (normalise_work(i) for i in message.get("items") or [] if isinstance(i, dict)) if w]
         if not items:
             return self._remember(key, "title", query, ProviderResult(LookupState.NO_MATCH, detail="no results"), None)
+        # Each result is the same normalised record a DOI lookup would return, so it answers that lookup too: a document found
+        # by title and later accepted must not cost a second request to fetch what the search already delivered.
+        for work in items:
+            self._remember(f"{self.name}:{CLIENT_VERSION}:doi:{work['doi']}", "doi", work["doi"], ProviderResult(LookupState.SUCCESS, work=work), json.dumps(work))
         return self._remember(key, "title", query, ProviderResult(LookupState.SUCCESS, items=items), json.dumps(items))
 
     # -- plumbing

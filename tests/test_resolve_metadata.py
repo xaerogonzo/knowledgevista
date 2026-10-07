@@ -511,3 +511,26 @@ def test_a_printed_doi_the_provider_only_weakly_matches_sends_the_document_to_a_
     lib.resolve(online=True, provider=provider, accept_safe=True)
     assert provider.calls == [("doi", DOI), ("title", TITLE)]  # not usable, so the title is tried; a confirmed DOI never searches (test above)
     assert lib.candidates("a.pdf", "doi", "crossref_title_search")[0]["value"] == DOI2
+
+
+def test_an_accepted_doi_the_provider_has_never_heard_of_is_reported_and_left_alone(make_library):
+    """Accepted offline by local evidence, then asked about online: the provider's silence cannot undo it, but must be said."""
+    lib = make_library({"a.pdf": article()})
+    lib.resolve(accept_safe=True)
+    assert lib.values("a.pdf")["doi"] == DOI
+    report = lib.resolve(online=True, provider=FakeProvider({}), accept_safe=True)
+    assert report["online"]["accepted_doi_unknown_to_provider"] == 1
+    assert any(DOI in p["message"] and "not known to the provider" in p["message"] for p in report["problems"])
+    assert lib.values("a.pdf")["doi"] == DOI  # reported, never undone
+
+
+def test_a_rule_accepted_doi_whose_record_only_weakly_matches_is_reported_and_left_alone(make_library):
+    lib = make_library({"a.pdf": article()})
+    lib.resolve(accept_safe=True)
+    weak = crossref_work(title=TITLE + " and Their Remarkable Aqueous Solubility Behaviour Under Pressure")
+    report = lib.resolve(online=True, provider=FakeProvider({DOI: weak}), accept_safe=True)
+    assert report["online"]["accepted_doi_weak"] == 1 and any("only weakly matches" in p["message"] for p in report["problems"])
+    assert lib.values("a.pdf")["doi"] == DOI
+    metadata.set_value(lib.conn, lib.doc("a.pdf"), "doi", DOI)  # a person's own statement is not second-guessed
+    again = lib.resolve(online=True, provider=FakeProvider({DOI: weak}), accept_safe=True)
+    assert "accepted_doi_weak" not in again["online"]
