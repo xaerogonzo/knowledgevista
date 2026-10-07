@@ -29,7 +29,7 @@ from knowledgevista.services.cursor import MAX_LIMIT, MAX_WINDOW
 #: Bumped by a change to what callers integrate against (see the module docstring), not by any other change.
 PROTOCOL_VERSION = 1
 
-READ, CATALOG, CACHE, CONFIG = "read", "catalog", "cache", "config"
+READ, CATALOG, CACHE, CONFIG, FILESYSTEM = "read", "catalog", "cache", "config", "filesystem"
 
 #: command -> kind. `read` writes nothing: not the catalog, not the cache, not the settings, never a source file.
 COMMAND_KINDS: dict[str, str] = {
@@ -44,6 +44,7 @@ COMMAND_KINDS: dict[str, str] = {
     "collection delete": CATALOG, "tag add": CATALOG, "tag remove": CATALOG, "tag list": READ,
     "saved list": READ, "saved run": READ, "saved delete": CATALOG, "view": READ,
     "capabilities": READ, "locate": READ, "open": READ, "mcp": READ,
+    "root allow-organize": CATALOG, "plan create": CATALOG, "plan show": READ, "apply": FILESYSTEM, "undo": FILESYSTEM, "recover": FILESYSTEM, "history": READ,
 }
 #: Options that turn an otherwise read-only command into a writing one. Listed so a caller does not have to trust the kind alone.
 MUTATING_OPTIONS: dict[str, list[str]] = {"search": ["--save"], "resolve": ["--accept-safe", "--online"]}

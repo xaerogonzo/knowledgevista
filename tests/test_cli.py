@@ -191,7 +191,7 @@ def test_doctor_summary_names_the_categories_it_checked(capsys, tmp_path, lib):
     run_json(capsys, tmp_path, "scan")
     code, env, _ = run_json(capsys, tmp_path, "doctor")
     summary = env["records"][0]
-    assert code == 0 and summary["type"] == "summary" and summary["categories_checked"] == ["filesystem", "catalog", "extraction", "search", "metadata", "relationships"]
+    assert code == 0 and summary["type"] == "summary" and summary["categories_checked"] == ["filesystem", "catalog", "extraction", "search", "metadata", "relationships", "operations"]
 
 
 def test_doctor_exits_1_when_it_finds_catalog_errors(capsys, tmp_path, lib):

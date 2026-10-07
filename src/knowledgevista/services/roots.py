@@ -92,6 +92,18 @@ def add_root(
     return get_root(connection, root_id)
 
 
+def set_allow_organize(connection: sqlite3.Connection, selector: str, allow: bool) -> tuple[Root, bool]:
+    """A person says whether the organizer may touch this root's files. Off by default; this is the only way to change it. Returns the
+    root and whether anything changed. Taking permission away does not undo anything already done: it stops the next apply and undo."""
+    (root,) = find_roots(connection, selector)
+    if root.allow_organize == allow:
+        return root, False
+    with transaction(connection):
+        connection.execute("UPDATE root SET allow_organize = ? WHERE root_id = ?", (int(allow), root.root_id))
+        bump_revision(connection)
+    return get_root(connection, root.root_id), True
+
+
 def list_roots(connection: sqlite3.Connection) -> list[Root]:
     return [Root.from_row(row) for row in connection.execute("SELECT * FROM root ORDER BY created_at, root_id")]
 

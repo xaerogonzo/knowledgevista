@@ -33,7 +33,7 @@ first, and reversible.
 See [docs/INVARIANTS.md](docs/INVARIANTS.md), [docs/SAFETY_MODEL.md](docs/SAFETY_MODEL.md) and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Try it (milestones 1 to 5)
+## Try it (milestones 1 to 6)
 
 ```bash
 uv sync --extra extract        # PyMuPDF, needed only to read PDF text
@@ -85,9 +85,20 @@ uv run kv capabilities --json                 # versions, which commands only re
 uv run kv mcp                                 # read-only Model Context Protocol server on stdin/stdout for a coding assistant
 ```
 
+Optionally, let names say what the files are, and take it all back (nothing moves unless you run `apply`; see [docs/ORGANIZER.md](docs/ORGANIZER.md)):
+
+```bash
+uv run kv root allow-organize papers      # a person says so, per root; the default is no
+uv run kv plan create                     # PROPOSE new names from ACCEPTED titles; a plan file outside the library; moves nothing
+uv run kv plan show <plan> --status all   # read it
+uv run kv apply <plan> --dry-run          # every check, hashing each source; moves nothing
+uv run kv apply <plan>                    # MOVE: journaled, never overwrites, never follows a link
+uv run kv undo                            # byte for byte; refuses a file that was edited since
+```
+
 Add `--json` for machine output (see [docs/CLI_CONTRACT.md](docs/CLI_CONTRACT.md)); [docs/SEARCH.md](docs/SEARCH.md) says
 exactly what search does and does not do, and [docs/METADATA.md](docs/METADATA.md) what a proposal is, how a DOI is judged to be
-a document's own, and what the batch rule may and may not do; [docs/RELATIONS.md](docs/RELATIONS.md) says what a relation, a duplicate and a merge are, [docs/INTEGRATION.md](docs/INTEGRATION.md) what another program may rely on, and [docs/MCP.md](docs/MCP.md) what the assistant server can and cannot do. Nothing here writes to your folders.
+a document's own, and what the batch rule may and may not do; [docs/RELATIONS.md](docs/RELATIONS.md) says what a relation, a duplicate and a merge are, [docs/INTEGRATION.md](docs/INTEGRATION.md) what another program may rely on, [docs/MCP.md](docs/MCP.md) what the assistant server can and cannot do, and [docs/ORGANIZER.md](docs/ORGANIZER.md) how files are renamed and moved, and what is checked first. Nothing here writes to your folders.
 
 ## Develop
 

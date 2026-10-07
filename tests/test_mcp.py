@@ -21,6 +21,7 @@ from test_resolve_metadata import Library
 
 from knowledgevista import paths
 from knowledgevista.db.catalog import open_catalog_strict
+from knowledgevista.db.migrations import load_migrations
 from knowledgevista.extract.client import ExtractionSession
 from knowledgevista.index import metacache, store
 from knowledgevista.mcp import protocol, tools
@@ -460,13 +461,14 @@ def test_a_tool_cannot_write_even_if_it_tried(world):
 
 
 def test_an_older_catalog_is_reported_not_upgraded_and_a_newer_one_is_refused(world):
-    world.conn.execute("DELETE FROM schema_migration WHERE version = 4")
+    latest = load_migrations()[-1].version
+    world.conn.execute("DELETE FROM schema_migration WHERE version = ?", (latest,))
     server = initialised(world)
     error = failed(server, "list_duplicates")
-    assert error["code"] == "KV_CATALOG_OUTDATED" and error["details"] == {"catalog_version": 3, "expected": 4}
+    assert error["code"] == "KV_CATALOG_OUTDATED" and error["details"] == {"catalog_version": latest - 1, "expected": latest}
     assert world.conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE name = 'relation_candidate'").fetchone()[0] == 1  # nothing was migrated or dropped
-    assert world.conn.execute("SELECT MAX(version) FROM schema_migration").fetchone()[0] == 3
-    world.conn.execute("INSERT INTO schema_migration (version, name, applied_at, app_version) VALUES (4, 'x', 'now', 'x')")
+    assert world.conn.execute("SELECT MAX(version) FROM schema_migration").fetchone()[0] == latest - 1
+    world.conn.execute("INSERT INTO schema_migration (version, name, applied_at, app_version) VALUES (?, 'x', 'now', 'x')", (latest,))
     world.conn.execute("INSERT INTO schema_migration (version, name, applied_at, app_version) VALUES (99, 'future', 'now', 'x')")
     assert failed(server, "list_duplicates")["code"] == "KV_CATALOG_TOO_NEW"
 

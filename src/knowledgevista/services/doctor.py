@@ -11,6 +11,8 @@ means "not applicable", and `categories_checked` says exactly which ones were ex
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import os
 import sqlite3
 from dataclasses import dataclass, field
@@ -19,7 +21,7 @@ from typing import Any
 from knowledgevista.db.migrations import current_version, load_migrations
 from knowledgevista.domain.pathkeys import fs_path
 
-CHECKED_CATEGORIES = ["filesystem", "catalog", "extraction", "search", "metadata", "relationships"]
+CHECKED_CATEGORIES = ["filesystem", "catalog", "extraction", "search", "metadata", "relationships", "operations"]
 
 
 @dataclass
@@ -96,6 +98,7 @@ def run_doctor(conn: sqlite3.Connection, index: sqlite3.Connection | None = None
     _check_extraction(conn, index, found)
     _check_metadata(conn, found)
     _check_relationships(conn, found)
+    _check_operations(conn, found)
     return found
 
 
@@ -209,3 +212,26 @@ def _check_relationships(conn: sqlite3.Connection, found: list[Finding]) -> None
 
 def has_errors(findings: list[Finding]) -> bool:
     return any(f.severity == "error" for f in findings)
+
+
+def _check_operations(conn: sqlite3.Connection, found: list[Finding]) -> None:
+    """The organizer's journal against itself and the catalog. Reads the journal and the catalog; never the filesystem (doctor reads no
+    file contents), so "the journal says a file is at X" is checked against what the CATALOG says, and `kv verify`/`kv scan` check the disk."""
+    add = lambda *a, **k: found.append(Finding(*a, **k))  # noqa: E731
+    for row in conn.execute("SELECT operation_id, kind, started_at FROM operation WHERE status = 'running' ORDER BY started_at"):
+        add("operations", "warning", "KVD_OPERATION_UNFINISHED", f"A {row['kind']} ({row['operation_id'][:8]}, started {row['started_at']}) never finished. Nothing else will move a file until: kv recover",
+            {"operation_id": row["operation_id"], "kind": row["kind"]})
+    for row in conn.execute("SELECT i.row_id, i.operation_id, i.old_path, i.new_path, i.state, o.status FROM operation_item i JOIN operation o ON o.operation_id = i.operation_id WHERE i.state = 'uncertain'"):
+        add("operations", "warning", "KVD_ITEM_UNCERTAIN", f"A move of {row['old_path']} could not be confirmed either way; it was left alone. Look at the files, then kv scan.",
+            {"operation_id": row["operation_id"], "old_path": row["old_path"], "new_path": row["new_path"]})
+    for row in conn.execute(
+        "SELECT i.row_id, i.operation_id, i.new_path, i.location_id_after, l.relative_path, l.root_id AS loc_root, i.root_id FROM operation_item i "
+        "LEFT JOIN location l ON l.location_id = i.location_id_after WHERE i.state = 'succeeded'"
+    ):
+        if row["location_id_after"] is None or row["relative_path"] is None:
+            add("operations", "error", "KVD_ITEM_WITHOUT_LOCATION", "A move the journal calls successful has no location in the catalog.", {"operation_id": row["operation_id"], "new_path": row["new_path"]})
+        elif row["relative_path"] != row["new_path"] or row["loc_root"] != row["root_id"]:
+            add("operations", "error", "KVD_ITEM_LOCATION_MISMATCH", "A successful move's location is not at the path the journal says it moved to.", {"operation_id": row["operation_id"], "new_path": row["new_path"]})
+    for row in conn.execute("SELECT plan_id, path FROM plan_registry"):
+        if not Path(row["path"]).is_file():
+            add("operations", "info", "KVD_PLAN_FILE_GONE", "A registered plan's file is no longer where it was written, so it cannot be applied. Its record is kept.", {"plan_id": row["plan_id"], "path": row["path"]})

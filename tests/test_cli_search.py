@@ -114,7 +114,7 @@ def test_stats_and_doctor_cover_extraction_and_search(capsys, ready):
     _, env, _ = run_json(capsys, ready, "stats")
     assert env["records"][0]["search"]["not_yet_extracted"] == 4
     _, env, _ = run_json(capsys, ready, "doctor")
-    assert env["records"][0]["categories_checked"] == ["filesystem", "catalog", "extraction", "search", "metadata", "relationships"]
+    assert env["records"][0]["categories_checked"] == ["filesystem", "catalog", "extraction", "search", "metadata", "relationships", "operations"]
     assert any(r.get("code") == "KVD_NOT_EXTRACTED" for r in env["records"])
     run_json(capsys, ready, "extract")
     _, env, _ = run_json(capsys, ready, "stats")

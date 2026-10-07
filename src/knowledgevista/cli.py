@@ -13,7 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from knowledgevista import __version__, cli_integration, cli_relations, paths
+from knowledgevista import __version__, cli_integration, cli_organize, cli_relations, paths
 from knowledgevista.cli_support import Outcome
 from knowledgevista.cli_support import catalog_path as _catalog_path
 from knowledgevista.cli_support import index_for as _index
@@ -505,6 +505,10 @@ def build_parser(json_mode: bool = False) -> _Parser:
     add.add_argument("--allow-organize", action="store_true", help="let a future rename/move plan touch this root (default: no)")
     add.set_defaults(handler=cmd_root_add)
     root_sub.add_parser("list", parents=[shared], help="list roots").set_defaults(handler=cmd_root_list)
+    allow = root_sub.add_parser("allow-organize", parents=[shared], help="let the organizer move files in this root (or, with --off, stop it); the default is no")
+    allow.add_argument("root", help="a root id, label or path")
+    allow.add_argument("--off", action="store_true", help="take the permission away")
+    allow.set_defaults(handler=cli_organize.cmd_root_allow)
 
     scan = sub.add_parser("scan", parents=[shared], help="find files, hash what changed, reconcile moves and removals")
     scan.add_argument("--root", help="a root id, label or path (default: every enabled root)")
@@ -611,6 +615,7 @@ def build_parser(json_mode: bool = False) -> _Parser:
 
     cli_relations.add_parsers(sub, shared, lambda **kw: _Sub(json_mode, **kw))
     cli_integration.add_parsers(sub, shared, lambda **kw: _Sub(json_mode, **kw))
+    cli_organize.add_parsers(sub, shared, lambda **kw: _Sub(json_mode, **kw))
     return parser
 
 
@@ -643,7 +648,7 @@ def main(argv: list[str] | None = None) -> int:
         if handler is None:
             raise KvError(ErrorCode.INVALID_ARGUMENTS, "No command given. Try: kv --help")
         command = args.command
-        if command in ("root", "import", "review", "metadata", "config", "relations", "document", "collection", "tag", "saved"):
+        if command in ("root", "import", "review", "metadata", "config", "relations", "document", "collection", "tag", "saved", "plan"):
             command = f"{command} {getattr(args, command + '_command')}"
         outcome = handler(args)
     except KvError as exc:

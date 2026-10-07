@@ -58,6 +58,13 @@ Argument errors under `--json` are envelopes too (`KV_INVALID_ARGUMENTS`, exit 2
 | `KV_CURSOR_STALE` | a pagination cursor predates a catalog change, or the listing it pointed into is no longer in the same order; run the command again without `--cursor` |
 | `KV_ROOT_UNAVAILABLE` | a root cannot be read right now; nothing was changed |
 | `KV_ROOT_OVERLAP` | a root would overlap an existing one |
+| `KV_ROOT_NOT_ORGANIZABLE` | the root does not allow the organizer to move its files (the default); a person sets it per root: `kv root allow-organize` |
+| `KV_PLAN_INVALID` | a plan file is not usable: not JSON, a format this program does not know, edited after it was made (hash mismatch), a rule broken by an item, or not made by this catalog. Exit 2 |
+| `KV_PLAN_STALE` | the library no longer matches the plan (a file moved, the accepted metadata or its naming policy changed, a document merged). The whole plan is refused and nothing was moved; make a new one. `details.items` lists why |
+| `KV_PATH_UNSAFE` | an organizer move was refused for its path: outside the root, through a link (symlink or junction), a name Windows forbids, too long |
+| `KV_OPERATION_UNFINISHED` | an earlier apply or undo never finished; run `kv recover` before anything else moves a file |
+| `KV_INTERRUPTED` | an item of an interrupted operation: it was recorded but did not happen (the file is where it started). Appears on items, never as a command's error |
+| `KV_UNCERTAIN` | an organizer move that cannot be confirmed either way. It is reported with what was seen and never retried |
 | `KV_CATALOG_TOO_NEW` | the catalog was written by a newer Knowledge Vista and was left untouched |
 | `KV_CATALOG_OUTDATED` | the catalog is from an older program and a read-only caller (`kv mcp`) will not upgrade it; any other `kv` command does, with a backup |
 | `KV_CATALOG_MISSING` | there is no catalog at the given path |
@@ -74,8 +81,9 @@ Warning and finding codes (`KV_ROOT_VOLUME_CHANGED`, `KV_MASS_MISSING`, `KV_UNRE
 ## Commands
 
 Each command is one of: **read** (leaves source files and the catalog unchanged), **catalog** (writes the catalog
-only), **cache** (writes only the rebuildable extraction store, never the catalog), or **filesystem** (touches the
-user's files; none exist yet). Source files are never written by any command in this milestone.
+only), **cache** (writes only the rebuildable extraction store, never the catalog), **config** (writes only the settings
+file) or **filesystem** (moves the user's files: only `apply`, `undo` and `recover`). `kv capabilities` flags every command, so
+a caller can refuse to run the ones that are not read-only.
 
 | Command | Kind | Does |
 |---|---|---|
@@ -124,6 +132,13 @@ user's files; none exist yet). Source files are never written by any command in 
 | `saved list` | read | saved searches |
 | `saved run <name> [--limit N] [--cursor C]` | read | run a saved search against the library as it is now |
 | `saved delete <name>` | catalog | remove a saved search from view; its record is kept |
+| `root allow-organize <root> [--off]` | catalog | let the organizer move files in this root (or stop it). Off by default; this is the only way to change it |
+| `plan create [--root R]... [--layout L] [--document D]... [--out FILE] [--no-disk-check] [--status S] [--limit N] [--cursor C]` | catalog | PROPOSE renames (and, with `--layout by_year`, moves) from ACCEPTED metadata, as a frozen, hashed plan file written outside the library and registered here. **Moves nothing** |
+| `plan show <plan> [--status S] [--limit N] [--cursor C]` | read | read a plan (its file, or an id this catalog made): every item with its old and new path, risk and reason |
+| `apply <plan> [--dry-run] [--verify-hashes]` | filesystem | MOVE FILES as a plan says. Checks the plan still matches the library, then each move's preconditions (source hash, destination absent, no link on the path, root allows it), journals the intent before touching a file, and never overwrites. `--dry-run` runs every check and moves nothing |
+| `undo [--operation ID] [--dry-run] [--verify-hashes]` | filesystem | move files back as an apply moved them (default: the latest apply with moves still in place). Refuses any file whose bytes changed since, or whose old path is occupied; never overwrites |
+| `recover [--dry-run]` | filesystem | reconcile an interrupted apply or undo with what is on disk: finishes the bookkeeping for a move that happened, marks one that did not, puts a file left at a temporary name back. Never retries and never moves a file forward |
+| `history [operation] [--limit N]` | read | the organizer's journal: operations (apply, undo, recover) with their item counts, or with an id, each move and its outcome |
 | `capabilities` | read | what this installation can do, for a program: the four version numbers, every command flagged read-only or not, the MCP tools, the `knowledgevista://` forms. Needs no catalog |
 | `locate <reference> [--no-disk-check]` | read | where a document or file is NOW, from a document id, a SHA-256 (or prefix), a path or a `knowledgevista://` reference: every current path, whether each is really on disk, what the library knows. The call OpenChem makes |
 | `open <reference> [--pdf-page N \| --label L] [--no-launch]` | read | hand the file to the operating system's viewer (starts a program; changes nothing in the library). The page is reported, not navigated to |
@@ -148,6 +163,19 @@ paged past 5000 items (narrow the query instead). Listings are in a deterministi
 `root_offline`, `missing`, `unlocated`), `available`, `document_id`, `artifact_id`, `uri`, and `locations` each with `absolute_path`,
 `root_status`, `state` and `on_disk` (`true`, `false`, or `null` when the root is offline and nothing was checked). Warning codes:
 `KV_HISTORICAL_MATCH` (a name that only matched a past location), `KV_DOCUMENT_MERGED` (a merged-away id was resolved to its survivor).
+
+## Organizer commands
+
+Records: `plan create` and `plan show` print a `summary` (`plan_id`, `path`, `hash`, `naming_policy`, `layout`, counts by `operation`, `status` and
+`risk`) and one `item` per listed item (`item_id`, `operation` rename | move | rename+move | unchanged, `status` planned | unchanged | blocked, `old_path`,
+`new_path`, `expected_sha256`, `risk`, `confidence`, `source`, `reason`, `blocked_reason`, and the `snapshot` of accepted metadata the name was built from).
+`apply`, `undo` and `recover` print a `summary` (`kind`, `operation_id`, `dry_run`, `already_done`, `counts`, `problems`) and one `item` each with its `state`:
+`succeeded`, `already_applied`, `undone`, `would_move` (dry run), `skipped` (a locked file: a **warning** `KV_ITEM_SKIPPED`, never a failure), `failed` or `uncertain`
+(an **error** entry with the item's own code: `KV_FILE_CHANGED`, `KV_FILE_MISSING`, `KV_DESTINATION_EXISTS`, `KV_PERMISSION_DENIED`, `KV_PATH_UNSAFE`,
+`KV_UNCERTAIN`). `ok` is false, and the exit code 1, exactly when an item `failed` or is `uncertain`.
+
+A plan the library no longer matches is `KV_PLAN_STALE` and nothing moves; applying the same plan twice reports `already_applied` and changes nothing.
+Warning codes: `KV_ITEMS_BLOCKED` (a plan holds items whose destination is occupied or unusable). The reasoning is in [ORGANIZER.md](ORGANIZER.md).
 
 `<reference>` is a document id, an artifact SHA-256 (or a unique prefix of 8+ hex characters), or a path / file
 name. A name that matches more than one document is `KV_AMBIGUOUS`; a name that only matches a *past* location is

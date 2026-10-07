@@ -20,7 +20,10 @@ being folded into the plan; an entry reopens the architecture only if it contrad
 | `kv backup` / `kv restore` convenience | users ask; `kv export` and the migration backup cover the need until then |
 | Read-status and reading-list entities | a "To Read" collection stops being enough |
 | Hard-link browse folder | a concrete workflow needs it. A hard link is the same file: editing it edits the original, so it would be labelled that way |
-| A migration script that rewrites OpenChem's recorded `file` names from the organizer journal | the reversible organizer (milestone 6) exists and has renamed a held file; until then `kv locate` by hash covers a moved file |
+| A migration script that rewrites OpenChem's recorded `file` names from the organizer journal | the organizer (milestone 6, built) has renamed a held file in a library OpenChem reads, and OpenChem PR #246 (`index_literature --check` through `kv locate`) is merged. Until then `kv locate` by hash covers a moved file and nothing needs rewriting |
+| Organizer on a UNC (network) root | a library on a share exists to test against. Path composition for UNC and extended-length forms is tested; no real share was available, so a move on one is unproven |
+| A Recycle-Bin duplicate-removal action | exact copies are a real burden. It would be a separate action with its own plan, never part of rename/move |
+| Naming policies beyond `naming-1` (editions, DOI in the name, other layouts) | a person asks for a layout the two built ones do not give; a new policy is a new version, and old plans go stale by design |
 | Page-targeted open in an external viewer | the built-in reader (milestone 8) exists; an arbitrary default viewer cannot be told which page |
 | Per-root policies beyond `allow_organize` | multiple roots with different needs exist |
 | Chemistry-aware search normalisation | opt-in only; default search never rewrites scientific terms |
