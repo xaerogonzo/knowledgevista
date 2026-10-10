@@ -127,6 +127,17 @@ def add_root(ctx: JobContext, path: str, label: str | None, allow_organize: bool
         return roots.add_root(conn, path, label=label, allow_organize=allow_organize, catalog_path=str(ctx.catalog)).as_dict()
 
 
+def copy_catalog(ctx: JobContext, source: str, folder: str) -> dict[str, Any]:
+    """Copy a library's catalog to `folder` (the window's Move catalog). Read-only on the original, touches no document, overwrites and
+    deletes nothing (services/catalog_copy.py). On the write lane so it never overlaps this window's own writes to the catalog."""
+    ctx.progress("Copying the catalog…")
+    from knowledgevista.services import catalog_copy
+
+    result = catalog_copy.copy_catalog(source, folder)
+    return {"source": str(result.source), "destination": str(result.destination), "library_id": result.library_id,
+            "cache_copied": result.cache_copied, "notes": list(result.notes)}
+
+
 def decide(ctx: JobContext, item: dict[str, Any], accept: bool) -> dict[str, Any]:
     with ctx.writer() as (conn, _):
         return lv.decide_item(conn, item, accept)

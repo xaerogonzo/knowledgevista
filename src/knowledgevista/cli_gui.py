@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from knowledgevista.cli_support import Outcome, catalog_path
+from knowledgevista.cli_support import Outcome
 from knowledgevista.errors import ErrorCode, KvError
 
 
@@ -16,7 +16,7 @@ def cmd_gui(args: argparse.Namespace) -> Outcome:
                       {"extra": "gui", "package": "PySide6"})
     from knowledgevista.gui import app
 
-    app.run(catalog_path(args))
+    app.run(getattr(args, "catalog", None))  # None: open the library used last, else the default (an explicit --catalog always wins)
     return Outcome(silent=True)  # the window said everything; there is no envelope to print
 
 

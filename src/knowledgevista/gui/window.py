@@ -19,18 +19,20 @@ from typing import Any
 
 from PySide6.QtCore import QByteArray, QModelIndex, QSize, QSortFilterProxyModel, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDockWidget, QHBoxLayout, QHeaderView, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
-                               QPushButton, QTableView, QTableWidget, QTableWidgetItem, QTabWidget, QToolBar, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDockWidget, QFileDialog, QHBoxLayout, QHeaderView, QLineEdit, QMainWindow, QMessageBox,
+                               QPlainTextEdit, QPushButton, QTableView, QTableWidget, QTableWidgetItem, QTabWidget, QToolBar, QTreeWidget,
+                               QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from knowledgevista import __version__
 from knowledgevista.domain import health_view
 from knowledgevista.errors import ErrorCode
 from knowledgevista.gui import jobs as J
+from knowledgevista.gui import libraries
 from knowledgevista.gui import state as statemod
 from knowledgevista.gui import work
 from knowledgevista.gui.detail import DetailPane, EvidenceDialog
-from knowledgevista.gui.dialogs import AddRootDialog, ChoiceDialog, ConfirmDialog, RenameDialog
+from knowledgevista.gui.dialogs import (AddRootDialog, ChoiceDialog, ConfirmDialog, ManageLibrariesDialog, MoveLibraryDialog, NewLibraryDialog,
+                                        RenameDialog)
 from knowledgevista.gui.models import ITEM_ROLE, SORT_ROLE, DocumentModel, DocumentProxy, HitModel, ReviewModel
 from knowledgevista.gui.shell import SystemShell
 from knowledgevista.gui.text import message_box, plain_label, set_plain, tooltip
@@ -73,18 +75,24 @@ def describe_resolve(result: dict[str, Any]) -> str:
 class MainWindow(QMainWindow):
     refreshed = Signal(int)  # the catalog revision the lists now show
     notified = Signal(str, str)  # kind, text
+    switchRequested = Signal(str, str, bool)  # catalog path, name ('' = keep), create it: the application shows that library instead (app.Session)
 
     def __init__(self, catalog: Path | str, library_id: str | None = None, *, state_path: Path | None = None, shell: Any = None,
-                 poll_ms: int = 1500, remember: bool = True):
+                 poll_ms: int = 1500, remember: bool = True, library_name: str | None = None, libraries_path: Path | None = None):
         super().__init__()
         self.setObjectName("mainWindow")
-        self.setWindowTitle("Knowledge Vista")
         self.catalog = Path(catalog)
         self.library_id = library_id
         self.shell = shell or SystemShell()
         self._state_path = state_path
+        self._libraries_path = libraries_path
         self._remember = remember
-        self.state = statemod.load(state_path).for_library(library_id) if remember else statemod.GuiState(library_id=library_id)
+        known = libraries.load(libraries_path).find(self.catalog) if remember else None
+        self.library_name = library_name or (known.name if known else libraries.label_for(self.catalog))
+        self.setWindowTitle(f"Knowledge Vista — {self.library_name}")
+        if remember:
+            libraries.note_opened(self.catalog, library_name, libraries_path)
+        self.state = statemod.load(state_path, library_id) if remember else statemod.GuiState(library_id=library_id)
         self.scope = self.state.scope
         self.current_document: str | None = self.state.document_id
         self.revision: int | None = None
@@ -95,6 +103,9 @@ class MainWindow(QMainWindow):
         self.messages: list[tuple[str, str]] = []
         self._boxes: list[Any] = []
         self._dialogs: list[Any] = []
+        self._manage: ManageLibrariesDialog | None = None
+        #: Said by the NEXT window if this one hands over to another library (a moved catalog: where the old file was left).
+        self.handover_message = ""
         self._restoring = False
         self._closing = False
 
@@ -153,11 +164,23 @@ class MainWindow(QMainWindow):
         self.act_refresh = self._action("actionRefresh", "Refresh", self.refresh, "Ctrl+R", "Read the library again.")
         self.act_reset = self._action("actionResetOrder", "Reset order", self.reset_order, None, "Back to the default order: what needs a person first, then alphabetical.")
         self.act_open = self._action("actionOpen", "Open file", self.open_current, "Ctrl+O", "Open the selected document in your PDF viewer.")
+        self.act_open_library = self._action("actionOpenLibrary", "Open library…", self.open_library, "Ctrl+Shift+O", "Show another library (a catalog file) in this window. Nothing in either library is changed.")
+        self.act_new_library = self._action("actionNewLibrary", "New library…", self.open_new_library, "Ctrl+Shift+N", "Start a separate, empty library with its own folders, documents and tags.")
+        self.act_manage_libraries = self._action("actionManageLibraries", "Manage libraries…", self.open_manage_libraries, None, "Rename a library, show where its catalog is, copy the catalog to another folder, or take a library off the list. Documents are never touched.")
+        self.act_ask_startup = self._action("actionAskStartup", "Ask which library at startup", self.toggle_ask_at_startup, None, "At launch, offer a choice of library when there is more than one. Off: open the library used last.")
+        self.act_ask_startup.setCheckable(True)
+        self.act_ask_startup.setChecked(self._registry().ask_at_startup)
         self.act_quit = self._action("actionQuit", "Quit", self.close, "Ctrl+Q")
         self.act_about = self._action("actionAbout", "About Knowledge Vista", self.show_about)
         menu = self.menuBar()
         file_menu = menu.addMenu("&File")
         file_menu.addActions([self.act_add, self.act_open])
+        file_menu.addSeparator()
+        file_menu.addActions([self.act_open_library, self.act_new_library])
+        self.recent_menu = file_menu.addMenu("Recent libraries")
+        self.recent_menu.setObjectName("recentLibrariesMenu")
+        self.recent_menu.aboutToShow.connect(self._fill_recent)
+        file_menu.addActions([self.act_manage_libraries, self.act_ask_startup])
         file_menu.addSeparator()
         file_menu.addAction(self.act_quit)
         library_menu = menu.addMenu("&Library")
@@ -713,6 +736,189 @@ class MainWindow(QMainWindow):
             r = job.result
             self.notify(f"Accepted {r['accepted']:,} value(s) by the batch rule; {r['left_for_a_person']:,} left for a person.", "info")
         self.refresh()
+
+    # -- choosing the library --------------------------------------------------------------------------------------------
+
+    def _fill_recent(self) -> None:
+        """The Recent libraries menu, read when it opens: every library the window has shown, this one ticked, a vanished file marked."""
+        for old in self.recent_menu.actions():
+            old.deleteLater()
+        self.recent_menu.clear()
+        here = libraries.key_of(self.catalog)
+        registry = libraries.load(self._libraries_path) if self._remember else libraries.Registry()
+        for number, known in enumerate(libraries.known_for_menu(registry)):
+            current = libraries.key_of(known.path) == here
+            missing = not current and not known.exists and not libraries.is_default(known.path)
+            label = known.name.replace("&", "&&") + (" — file missing" if missing else "")  # '&' would be read as a shortcut
+            action = self._action(f"recentLibrary{number}", label, lambda k=known: self.pick_library(k.path, k.name), tip=known.path)
+            action.setCheckable(True)
+            action.setChecked(current)
+            self.recent_menu.addAction(action)
+
+    def pick_library(self, path: str, name: str = "") -> None:
+        """A library chosen from the list. One whose file has gone is not opened (that would invent an empty one); the person is asked
+        whether to take it off the list."""
+        if libraries.key_of(path) == libraries.key_of(self.catalog):
+            self.notify(f"“{self.library_name}” is already open.", "info")
+        elif libraries.is_default(path):
+            self.request_switch(path, name, create=not Path(path).is_file())  # the app's own library is made on first use, as `kv gui` makes it
+        elif not Path(path).is_file():
+            dialog = ConfirmDialog("Library not found", f"There is no library file at {path}.\n\nRemove it from the list? Nothing on disk is touched.",
+                                   "Remove from list", self, name="confirmForgetLibrary")
+            dialog.accepted.connect(lambda: self.forget_library(path))
+            self._open_dialog(dialog)
+        else:
+            self.request_switch(path, name)
+
+    def forget_library(self, path: str) -> None:
+        if self._remember:
+            libraries.save(libraries.forgotten(libraries.load(self._libraries_path), path), self._libraries_path)
+        self.notify("Removed it from the list of libraries.", "info")
+        self._refill_manage()
+
+    def open_library(self) -> None:
+        dialog = QFileDialog(self, "Open a library", str(self.catalog.parent), "Library files (*.sqlite);;All files (*)")
+        dialog.setObjectName("openLibraryDialog")
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        dialog.fileSelected.connect(lambda chosen: self.request_switch(chosen))
+        self._open_dialog(dialog)
+
+    def open_new_library(self) -> None:
+        dialog = NewLibraryDialog(self)
+        dialog.accepted.connect(lambda: self.create_library(**dialog.values()))
+        self._open_dialog(dialog)
+
+    def create_library(self, name: str, folder: str) -> None:
+        directory = Path(folder).expanduser()
+        if not directory.is_absolute():
+            self.error("New library", "Choose a full folder path (for example D:\\Libraries\\Chemistry).")
+        elif (directory / "catalog.sqlite").exists():
+            self.error("New library", f"{directory} already holds a library (catalog.sqlite). Use File > Open library… to show it, or choose another folder.")
+        else:
+            self.request_switch(str(directory / "catalog.sqlite"), name, create=True)
+
+    def request_switch(self, path: str, name: str = "", create: bool = False) -> None:
+        """Ask the application to show another library here. Unfinished work is stopped only after a person says so."""
+        if self._closing:
+            return
+        if self.jobs.busy:
+            dialog = ConfirmDialog("Switch library", "A job is still running (see the Jobs panel).\n\nSwitching stops it at its next safe point; what it has "
+                                   "finished is kept, and you can run it again from the library later.", "Stop and switch", self, name="confirmSwitchLibrary")
+            dialog.accepted.connect(lambda: self.switchRequested.emit(path, name, create))
+            self._open_dialog(dialog)
+        else:
+            self.switchRequested.emit(path, name, create)
+
+    # -- managing the list of libraries ----------------------------------------------------------------------------------
+    # Nothing here changes a document or deletes a file. Rename and remove edit the LIST; Show in folder asks the shell; Move catalog
+    # copies the catalog (services/catalog_copy.py) and leaves the original where it is.
+
+    def _registry(self) -> libraries.Registry:
+        return libraries.load(self._libraries_path) if self._remember else libraries.Registry()
+
+    def _save_registry(self, registry: libraries.Registry) -> None:
+        if self._remember:
+            libraries.save(registry, self._libraries_path)
+
+    def inform(self, title: str, text: str) -> None:
+        """A message that stays until it is dismissed (a status-bar line would be gone before it was read)."""
+        box = message_box(self, title, text, icon=QMessageBox.Icon.Information, name="infoBox")
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        box.destroyed.connect(lambda _o=None, b=box: self._boxes.remove(b) if b in self._boxes else None)
+        self._boxes.append(box)
+        box.open()
+
+    def toggle_ask_at_startup(self) -> None:
+        ask = self.act_ask_startup.isChecked()
+        self._save_registry(libraries.with_ask_at_startup(self._registry(), ask))
+        self.notify("Next time, you will be asked which library to open." if ask else "Next time, the library you used last will open without asking.", "info")
+
+    def open_manage_libraries(self) -> None:
+        dialog = ManageLibrariesDialog(self)
+        dialog.renameRequested.connect(self.request_rename_library)
+        dialog.moveRequested.connect(self.request_move_library)
+        dialog.revealRequested.connect(self.reveal_library)
+        dialog.removeRequested.connect(self.remove_library)
+        dialog.destroyed.connect(lambda _o=None: setattr(self, "_manage", None))
+        self._manage = dialog
+        self._refill_manage()
+        self._open_dialog(dialog)
+
+    def _refill_manage(self) -> None:
+        if self._manage is not None:
+            try:
+                self._manage.fill(libraries.known_for_menu(self._registry()), str(self.catalog))
+            except RuntimeError:  # the dialog was closed and deleted a moment ago
+                self._manage = None
+
+    def request_rename_library(self, path: str) -> None:
+        known = self._registry().find(path)
+        dialog = ChoiceDialog("Rename library", "A new name for this library. Only the name changes; the catalog file keeps its name.", [], "Rename", self,
+                              name="renameLibraryDialog")
+        dialog.combo.setEditText(known.name if known else libraries.label_for(path))
+        dialog.accepted.connect(lambda: self.rename_library(path, dialog.value()))
+        self._open_dialog(dialog)
+
+    def rename_library(self, path: str, name: str) -> None:
+        name = " ".join(name.split())
+        if not name:
+            return
+        self._save_registry(libraries.renamed(self._registry(), path, name))
+        if libraries.key_of(path) == libraries.key_of(self.catalog):
+            self.library_name = name
+            self.setWindowTitle(f"Knowledge Vista — {name}")
+        self.notify(f"Renamed to “{name}”.", "info")
+        self._refill_manage()
+
+    def reveal_library(self, path: str) -> None:
+        self.shell.reveal(path)
+
+    def remove_library(self, path: str) -> None:
+        """Take a library off the list. The catalog file, and every document, stay exactly where they are."""
+        if libraries.key_of(path) == libraries.key_of(self.catalog):
+            self.notify("The library that is open cannot be removed from the list.", "info")
+        elif libraries.is_default(path):
+            self.notify("The default library is always on the list.", "info")
+        else:
+            known = self._registry().find(path)
+            self._save_registry(libraries.forgotten(self._registry(), path))
+            self.notify(f"Removed “{known.name if known else path}” from the list. Its catalog file was not touched.", "info")
+        self._refill_manage()
+
+    def request_move_library(self, path: str) -> None:
+        known = self._registry().find(path)
+        dialog = MoveLibraryDialog(self, name=known.name if known else libraries.label_for(path))
+        dialog.accepted.connect(lambda: self.move_library(path, **dialog.values()))
+        self._open_dialog(dialog)
+
+    def move_library(self, path: str, folder: str) -> None:
+        """Copy the catalog to `folder`, then use the copy. The original file is left where it is."""
+        if libraries.is_default(path):
+            self.error("Move catalog", "The default library stays where `kv` looks for it.")
+            return
+        self.jobs.submit("copy_catalog", "Move a library", lambda ctx: work.copy_catalog(ctx, path, folder), lane=J.WRITE, once=True,
+                         on_done=lambda job: self._library_copied(job, path))
+
+    def _library_copied(self, job: J.Job, old: str) -> None:
+        if job.state == J.FAILED:
+            self.error("Move catalog", job.error or "Could not copy the catalog. Nothing was changed.")
+            return
+        if job.state != J.SUCCEEDED:
+            return
+        result = job.result
+        known = self._registry().find(old)
+        self._save_registry(libraries.moved(self._registry(), old, result["destination"]))
+        text = (f"The catalog was copied to {result['destination']}, and that copy is what Knowledge Vista uses from now on.\n\n"
+                f"The original at {old} was left where it is. Your documents were not touched. Delete the old catalog yourself once you are sure you do not "
+                "need it; anything that still points at it (a `kv --catalog` shortcut, an MCP setting) keeps seeing the old copy.")
+        if result["notes"]:
+            text += "\n\n" + "\n".join(result["notes"])
+        if libraries.key_of(old) == libraries.key_of(self.catalog):
+            self.handover_message = text  # this window is about to be replaced; the new one says it
+            self.request_switch(result["destination"], known.name if known else "")
+        else:
+            self.inform("Catalog copied", text)
+            self._refill_manage()
 
     # -- changing the library --------------------------------------------------------------------------------------------
 

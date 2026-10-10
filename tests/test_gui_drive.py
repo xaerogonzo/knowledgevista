@@ -103,7 +103,8 @@ def test_a_second_process_finds_the_state_the_first_one_left(tmp_path, library):
     env = environment(tmp_path, library)
     done, report = run_gui(first, env)
     assert done.returncode == 0 and report["passed"], done.stdout + done.stderr + json.dumps(report["steps_failed"])
-    state = json.loads((tmp_path / "home" / "config" / "gui-state.json").read_text(encoding="utf-8"))
+    saved = json.loads((tmp_path / "home" / "config" / "gui-state.json").read_text(encoding="utf-8"))
+    (state,) = saved["libraries"].values()  # one library, so one entry
     assert (state["tab"], state["filter_text"], state["search_text"]) == ("review", "aqueous", "aqueous solubility") and state["document_id"]
 
     second = write_script(tmp_path, [
