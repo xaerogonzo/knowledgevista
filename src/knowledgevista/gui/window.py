@@ -19,18 +19,19 @@ from typing import Any
 
 from PySide6.QtCore import QByteArray, QModelIndex, QSize, QSortFilterProxyModel, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDockWidget, QHBoxLayout, QHeaderView, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
-                               QPushButton, QTableView, QTableWidget, QTableWidgetItem, QTabWidget, QToolBar, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDockWidget, QFileDialog, QHBoxLayout, QHeaderView, QLineEdit, QMainWindow, QMessageBox,
+                               QPlainTextEdit, QPushButton, QTableView, QTableWidget, QTableWidgetItem, QTabWidget, QToolBar, QTreeWidget,
+                               QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from knowledgevista import __version__
 from knowledgevista.domain import health_view
 from knowledgevista.errors import ErrorCode
 from knowledgevista.gui import jobs as J
+from knowledgevista.gui import libraries
 from knowledgevista.gui import state as statemod
 from knowledgevista.gui import work
 from knowledgevista.gui.detail import DetailPane, EvidenceDialog
-from knowledgevista.gui.dialogs import AddRootDialog, ChoiceDialog, ConfirmDialog, RenameDialog
+from knowledgevista.gui.dialogs import AddRootDialog, ChoiceDialog, ConfirmDialog, NewLibraryDialog, RenameDialog
 from knowledgevista.gui.models import ITEM_ROLE, SORT_ROLE, DocumentModel, DocumentProxy, HitModel, ReviewModel
 from knowledgevista.gui.shell import SystemShell
 from knowledgevista.gui.text import message_box, plain_label, set_plain, tooltip
@@ -73,17 +74,23 @@ def describe_resolve(result: dict[str, Any]) -> str:
 class MainWindow(QMainWindow):
     refreshed = Signal(int)  # the catalog revision the lists now show
     notified = Signal(str, str)  # kind, text
+    switchRequested = Signal(str, str, bool)  # catalog path, name ('' = keep), create it: the application shows that library instead (app.Session)
 
     def __init__(self, catalog: Path | str, library_id: str | None = None, *, state_path: Path | None = None, shell: Any = None,
-                 poll_ms: int = 1500, remember: bool = True):
+                 poll_ms: int = 1500, remember: bool = True, library_name: str | None = None, libraries_path: Path | None = None):
         super().__init__()
         self.setObjectName("mainWindow")
-        self.setWindowTitle("Knowledge Vista")
         self.catalog = Path(catalog)
         self.library_id = library_id
         self.shell = shell or SystemShell()
         self._state_path = state_path
+        self._libraries_path = libraries_path
         self._remember = remember
+        known = libraries.load(libraries_path).find(self.catalog) if remember else None
+        self.library_name = library_name or (known.name if known else libraries.label_for(self.catalog))
+        self.setWindowTitle(f"Knowledge Vista — {self.library_name}")
+        if remember:
+            libraries.note_opened(self.catalog, library_name, libraries_path)
         self.state = statemod.load(state_path).for_library(library_id) if remember else statemod.GuiState(library_id=library_id)
         self.scope = self.state.scope
         self.current_document: str | None = self.state.document_id
@@ -153,11 +160,18 @@ class MainWindow(QMainWindow):
         self.act_refresh = self._action("actionRefresh", "Refresh", self.refresh, "Ctrl+R", "Read the library again.")
         self.act_reset = self._action("actionResetOrder", "Reset order", self.reset_order, None, "Back to the default order: what needs a person first, then alphabetical.")
         self.act_open = self._action("actionOpen", "Open file", self.open_current, "Ctrl+O", "Open the selected document in your PDF viewer.")
+        self.act_open_library = self._action("actionOpenLibrary", "Open library…", self.open_library, "Ctrl+Shift+O", "Show another library (a catalog file) in this window. Nothing in either library is changed.")
+        self.act_new_library = self._action("actionNewLibrary", "New library…", self.open_new_library, "Ctrl+Shift+N", "Start a separate, empty library with its own folders, documents and tags.")
         self.act_quit = self._action("actionQuit", "Quit", self.close, "Ctrl+Q")
         self.act_about = self._action("actionAbout", "About Knowledge Vista", self.show_about)
         menu = self.menuBar()
         file_menu = menu.addMenu("&File")
         file_menu.addActions([self.act_add, self.act_open])
+        file_menu.addSeparator()
+        file_menu.addActions([self.act_open_library, self.act_new_library])
+        self.recent_menu = file_menu.addMenu("Recent libraries")
+        self.recent_menu.setObjectName("recentLibrariesMenu")
+        self.recent_menu.aboutToShow.connect(self._fill_recent)
         file_menu.addSeparator()
         file_menu.addAction(self.act_quit)
         library_menu = menu.addMenu("&Library")
@@ -713,6 +727,77 @@ class MainWindow(QMainWindow):
             r = job.result
             self.notify(f"Accepted {r['accepted']:,} value(s) by the batch rule; {r['left_for_a_person']:,} left for a person.", "info")
         self.refresh()
+
+    # -- choosing the library --------------------------------------------------------------------------------------------
+
+    def _fill_recent(self) -> None:
+        """The Recent libraries menu, read when it opens: every library the window has shown, this one ticked, a vanished file marked."""
+        for old in self.recent_menu.actions():
+            old.deleteLater()
+        self.recent_menu.clear()
+        here = libraries.key_of(self.catalog)
+        registry = libraries.load(self._libraries_path) if self._remember else libraries.Registry()
+        for number, known in enumerate(libraries.known_for_menu(registry)):
+            current = libraries.key_of(known.path) == here
+            missing = not current and not known.exists and not libraries.is_default(known.path)
+            label = known.name.replace("&", "&&") + (" — file missing" if missing else "")  # '&' would be read as a shortcut
+            action = self._action(f"recentLibrary{number}", label, lambda k=known: self.pick_library(k.path, k.name), tip=known.path)
+            action.setCheckable(True)
+            action.setChecked(current)
+            self.recent_menu.addAction(action)
+
+    def pick_library(self, path: str, name: str = "") -> None:
+        """A library chosen from the list. One whose file has gone is not opened (that would invent an empty one); the person is asked
+        whether to take it off the list."""
+        if libraries.key_of(path) == libraries.key_of(self.catalog):
+            self.notify(f"“{self.library_name}” is already open.", "info")
+        elif libraries.is_default(path):
+            self.request_switch(path, name, create=not Path(path).is_file())  # the app's own library is made on first use, as `kv gui` makes it
+        elif not Path(path).is_file():
+            dialog = ConfirmDialog("Library not found", f"There is no library file at {path}.\n\nRemove it from the list? Nothing on disk is touched.",
+                                   "Remove from list", self, name="confirmForgetLibrary")
+            dialog.accepted.connect(lambda: self.forget_library(path))
+            self._open_dialog(dialog)
+        else:
+            self.request_switch(path, name)
+
+    def forget_library(self, path: str) -> None:
+        if self._remember:
+            libraries.save(libraries.forgotten(libraries.load(self._libraries_path), path), self._libraries_path)
+        self.notify("Removed it from the list of libraries.", "info")
+
+    def open_library(self) -> None:
+        dialog = QFileDialog(self, "Open a library", str(self.catalog.parent), "Library files (*.sqlite);;All files (*)")
+        dialog.setObjectName("openLibraryDialog")
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        dialog.fileSelected.connect(lambda chosen: self.request_switch(chosen))
+        self._open_dialog(dialog)
+
+    def open_new_library(self) -> None:
+        dialog = NewLibraryDialog(self)
+        dialog.accepted.connect(lambda: self.create_library(**dialog.values()))
+        self._open_dialog(dialog)
+
+    def create_library(self, name: str, folder: str) -> None:
+        directory = Path(folder).expanduser()
+        if not directory.is_absolute():
+            self.error("New library", "Choose a full folder path (for example D:\\Libraries\\Chemistry).")
+        elif (directory / "catalog.sqlite").exists():
+            self.error("New library", f"{directory} already holds a library (catalog.sqlite). Use File > Open library… to show it, or choose another folder.")
+        else:
+            self.request_switch(str(directory / "catalog.sqlite"), name, create=True)
+
+    def request_switch(self, path: str, name: str = "", create: bool = False) -> None:
+        """Ask the application to show another library here. Unfinished work is stopped only after a person says so."""
+        if self._closing:
+            return
+        if self.jobs.busy:
+            dialog = ConfirmDialog("Switch library", "A job is still running (see the Jobs panel).\n\nSwitching stops it at its next safe point; what it has "
+                                   "finished is kept, and you can run it again from the library later.", "Stop and switch", self, name="confirmSwitchLibrary")
+            dialog.accepted.connect(lambda: self.switchRequested.emit(path, name, create))
+            self._open_dialog(dialog)
+        else:
+            self.switchRequested.emit(path, name, create)
 
     # -- changing the library --------------------------------------------------------------------------------------------
 

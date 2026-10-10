@@ -13,6 +13,7 @@ and the two see each other's changes.
 | | |
 |---|---|
 | **Add folder…** | A dialog for a folder and an optional name. *Allow the organizer to rename and move files here* is a separate box and starts **unticked**: adding a folder to read is not permission to change it. Adding scans it. |
+| **Open library… / New library… / Recent libraries** | *File* menu. A library is one catalog file with its own folders, documents, proposals, collections and tags; the window shows one at a time and its title says which (`Knowledge Vista — Chemistry`). *Open library…* shows another catalog file; a file that is not a Knowledge Vista catalog is refused and left byte for byte as it was (it is checked read-only first, so this program's tables are never written into another application's database), and a path that does not exist is refused, never created. *New library…* takes a name and a folder and makes `catalog.sqlite` there (it will not overwrite a folder that already holds one). *Recent libraries* lists every library the window has shown, this one ticked; one whose file has gone is marked, and choosing it offers to take it off the list (nothing on disk is touched). The app's own default library is always listed. If a job is still running you are asked first; *Stop and switch* stops it at its next safe point and keeps what it finished. Switching replaces the window with one over the other catalog (its own jobs, lists and selection), so nothing of the first library can show in the second. |
 | **Scan / Extract text / Resolve** | The three long jobs, in the toolbar and the Library menu. Each runs on a worker, shows in the Jobs panel with a **Stop** button, and can be stopped at its next safe point (between files, between documents). A stopped job keeps what it finished; run it again to continue. *Resolve* is offline: it reads DOIs and titles from the extracted text and **proposes** them. Nothing is accepted and nothing leaves the computer. |
 | **Documents** | Every live document, **what needs a person first** (unresolved, ambiguous, missing, new) then everything else alphabetically by title. The *Why* column says why a row is where it is; a click on a header re-sorts, *Reset order* returns to the default. The filter box narrows the list by title, author, DOI or path. The sidebar's views (Inbox, Unresolved, …), collections and tags narrow it by scope. |
 | **Details** | One document: its files and whether they are reachable, and each metadata field with its **origin badge** (`O` read from the file, `R` returned by a provider, `I` deduced, `A` stated by a person), whether it is locked, and whether the sources agree (*agrees*, *DIFFERS*, *waiting*, *one source*). |
@@ -68,7 +69,14 @@ it). Item views draw their text as plain text; only their tooltips need care.
 **What it remembers (`gui/state.py`).** Size, layout, the scope, the selected document, the filter and search text and the tab, in
 `gui-state.json` in the config folder. It is a convenience: a missing, damaged or newer file gives the defaults (a damaged one is
 logged), and a selection saved from another library is not applied to this one. The library's own state is the catalog, so deleting
-the file loses only where the window was.
+the file loses only where the window was. The layout is shared by every library; the selection and filters are kept for one library at a time,
+so going back to a library you left starts at its top, not where you were.
+
+**Which library opens (`gui/libraries.py`).** `kv gui --catalog <file>` always opens that file. Without it the window opens the library
+it showed last (`gui-libraries.json` in the config folder: the catalogs opened, their names, and the last one), and falls back to the
+app's own default if that file has gone; it never creates a file to stand in for a missing one. Like the window state it is tolerant of a
+missing, damaged or newer file (an empty list) and written atomically, and a scripted run (the driver) ignores it. It is only a list of
+paths: deleting it forgets the list and nothing else.
 
 ## The in-app driver
 

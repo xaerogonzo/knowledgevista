@@ -71,6 +71,57 @@ class AddRootDialog(QDialog):
         return {"path": self.path_edit.text().strip(), "label": self.label_edit.text().strip() or None, "allow_organize": self.organize_check.isChecked()}
 
 
+class NewLibraryDialog(QDialog):
+    """A separate, empty library: a name, and the folder its catalog file (catalog.sqlite) will live in. The catalog is never a document
+    folder: keep it outside any folder you add to read."""
+
+    def __init__(self, parent: QWidget | None = None, *, start_folder: str = ""):
+        super().__init__(parent)
+        self.setObjectName("newLibraryDialog")
+        self.setWindowTitle("New library")
+        self.resize(520, 0)
+        self._start = start_folder
+        layout = QVBoxLayout(self)
+        layout.addWidget(plain_label("A library keeps its own folders, documents, proposals, collections and tags, apart from every other library. "
+                                     "Choose where its catalog file lives; that folder should not be one you add as a folder of documents.", name="newLibraryIntro"))
+        form = QFormLayout()
+        self.name_edit = QLineEdit()
+        self.name_edit.setObjectName("libraryNameEdit")
+        self.name_edit.setPlaceholderText("a short name, e.g. Chemistry")
+        form.addRow("Name", self.name_edit)
+        row = QHBoxLayout()
+        self.folder_edit = QLineEdit(start_folder)
+        self.folder_edit.setObjectName("libraryFolderEdit")
+        self.folder_edit.setPlaceholderText("D:\\Libraries\\Chemistry")
+        self.browse_button = QPushButton("Browse…")
+        self.browse_button.setObjectName("browseButton")
+        self.browse_button.clicked.connect(self.browse)
+        row.addWidget(self.folder_edit, 1)
+        row.addWidget(self.browse_button)
+        form.addRow("Folder", row)
+        layout.addLayout(form)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Create")
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+        self.name_edit.textChanged.connect(self._sync)
+        self.folder_edit.textChanged.connect(self._sync)
+        self._sync()
+
+    def _sync(self) -> None:
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(bool(self.name_edit.text().strip() and self.folder_edit.text().strip()))
+
+    def browse(self) -> None:
+        """The system folder chooser. Modal by nature, and only ever reached by a click on Browse."""
+        chosen = QFileDialog.getExistingDirectory(self, "Choose a folder for the library", self.folder_edit.text().strip() or self._start)
+        if chosen:
+            self.folder_edit.setText(chosen)
+
+    def values(self) -> dict[str, Any]:
+        return {"name": " ".join(self.name_edit.text().split()), "folder": self.folder_edit.text().strip()}
+
+
 class ChoiceDialog(QDialog):
     """Pick an existing name or type a new one (a collection, a tag)."""
 
