@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +47,8 @@ class Known:
 class Registry:
     last: str | None = None
     libraries: list[Known] = field(default_factory=list)
+    #: Whether launching offers a choice of library (only ever when two or more exist). A person can switch it off in that dialog.
+    ask_at_startup: bool = True
 
     def find(self, catalog: Path | str) -> Known | None:
         wanted = key_of(catalog)
@@ -83,6 +85,8 @@ def from_dict(data: Any) -> Registry:
     last = data.get("last")
     if isinstance(last, str) and last.strip():
         registry.last = last
+    ask = data.get("ask_at_startup")
+    registry.ask_at_startup = ask if isinstance(ask, bool) else True
     del registry.libraries[MAX_KNOWN:]
     return registry
 
@@ -106,7 +110,8 @@ def load(path: Path | None = None) -> Registry:
 def save(registry: Registry, path: Path | None = None) -> bool:
     """Write the list so a crash never leaves half a file. Returns False (and logs) if it could not; the window carries on."""
     target = path or paths.gui_libraries_path()
-    payload = {"format": LIBRARIES_FORMAT, "last": registry.last, "libraries": [{"path": k.path, "name": k.name} for k in registry.libraries]}
+    payload = {"format": LIBRARIES_FORMAT, "last": registry.last, "ask_at_startup": registry.ask_at_startup,
+               "libraries": [{"path": k.path, "name": k.name} for k in registry.libraries]}
     temporary = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -131,13 +136,56 @@ def remembered(registry: Registry, catalog: Path | str, name: str | None = None)
     chosen = (name or "").strip() or (existing.name if existing else label_for(catalog))
     stored = os.path.abspath(catalog)
     others = [k for k in registry.libraries if key_of(k.path) != key_of(catalog)]
-    return Registry(last=stored, libraries=[Known(stored, chosen), *others][:MAX_KNOWN])
+    return replace(registry, last=stored, libraries=[Known(stored, chosen), *others][:MAX_KNOWN])
 
 
 def forgotten(registry: Registry, catalog: Path | str) -> Registry:
     """`registry` without `catalog` (the list only; the file is not touched)."""
     last = registry.last if registry.last and key_of(registry.last) != key_of(catalog) else None
-    return Registry(last=last, libraries=[k for k in registry.libraries if key_of(k.path) != key_of(catalog)])
+    return replace(registry, last=last, libraries=[k for k in registry.libraries if key_of(k.path) != key_of(catalog)])
+
+
+def renamed(registry: Registry, catalog: Path | str, name: str) -> Registry:
+    """`registry` with `catalog` called `name` (listed, at the end, if it was not: the app's own library is offered before it is ever listed).
+    A blank name changes nothing."""
+    chosen = " ".join(name.split())
+    if not chosen:
+        return registry
+    if registry.find(catalog) is None:
+        return replace(registry, libraries=[*registry.libraries, Known(os.path.abspath(catalog), chosen)][:MAX_KNOWN])
+    return replace(registry, libraries=[Known(k.path, chosen) if key_of(k.path) == key_of(catalog) else k for k in registry.libraries])
+
+
+def moved(registry: Registry, old: Path | str, new: Path | str) -> Registry:
+    """`registry` after a library's catalog was copied from `old` to `new`: the entry now points at `new`, keeping its name and its place
+    in the list (and as the last-opened one). The old file is not forgotten about on disk, only dropped from the list."""
+    existing = registry.find(old)
+    name = existing.name if existing else label_for(new)
+    stored = os.path.abspath(new)
+    entries: list[Known] = []
+    for known in registry.libraries:
+        if key_of(known.path) == key_of(old):
+            entries.append(Known(stored, name))
+        elif key_of(known.path) != key_of(new):  # a second entry for the destination would be a duplicate
+            entries.append(known)
+    if existing is None:
+        entries.insert(0, Known(stored, name))
+    last = stored if registry.last and key_of(registry.last) == key_of(old) else registry.last
+    return replace(registry, last=last, libraries=entries[:MAX_KNOWN])
+
+
+def with_ask_at_startup(registry: Registry, ask: bool) -> Registry:
+    return replace(registry, ask_at_startup=ask)
+
+
+def choosable(registry: Registry) -> list[Known]:
+    """The libraries a person can be offered at launch: those whose file exists (the app's own counts once it has been created)."""
+    return [k for k in known_for_menu(registry) if k.exists]
+
+
+def should_ask(registry: Registry) -> bool:
+    """Whether launching shows the 'which library?' dialog: only when it is switched on AND there is a real choice (two or more)."""
+    return registry.ask_at_startup and len(choosable(registry)) >= 2
 
 
 def last_existing(registry: Registry) -> Path | None:

@@ -6,7 +6,8 @@
 The window is an **adapter**, like the CLI and the MCP server (ARCHITECTURE.md): it carries no SQL and no rules of its own. What it
 shows is decided in `services/library_view.py`, which is tested without a display; what a person changes goes through the services
 the commands call (`metadata`, `review`, `organize`, `roots`, `scan`, `extract`, `resolve`). Anything the window can do, `kv` can do,
-and the two see each other's changes.
+and the two see each other's changes. (The one exception is *Move catalog…* under Manage libraries, which copies a catalog file and has no `kv`
+command; its logic is `services/catalog_copy.py`, tested without a display.)
 
 ## A person's path through it
 
@@ -14,6 +15,8 @@ and the two see each other's changes.
 |---|---|
 | **Add folder…** | A dialog for a folder and an optional name. *Allow the organizer to rename and move files here* is a separate box and starts **unticked**: adding a folder to read is not permission to change it. Adding scans it. |
 | **Open library… / New library… / Recent libraries** | *File* menu. A library is one catalog file with its own folders, documents, proposals, collections and tags; the window shows one at a time and its title says which (`Knowledge Vista — Chemistry`). *Open library…* shows another catalog file; a file that is not a Knowledge Vista catalog is refused and left byte for byte as it was (it is checked read-only first, so this program's tables are never written into another application's database), and a path that does not exist is refused, never created. *New library…* takes a name and a folder and makes `catalog.sqlite` there (it will not overwrite a folder that already holds one). *Recent libraries* lists every library the window has shown, this one ticked; one whose file has gone is marked, and choosing it offers to take it off the list (nothing on disk is touched). The app's own default library is always listed. If a job is still running you are asked first; *Stop and switch* stops it at its next safe point and keeps what it finished. Switching replaces the window with one over the other catalog (its own jobs, lists and selection), so nothing of the first library can show in the second. |
+| **Manage libraries…** | *File* menu. The libraries the window knows, with their state (*open now*, *default*, *file missing*). **Rename…** changes the name only (the catalog file keeps its name). **Show in folder** hands the catalog's folder to the system. **Remove from list** takes a library off the list and nothing more (never the open library, never the default). **Move catalog…** copies the catalog to a folder you choose, then uses the copy; see below. None of it changes a document, and **nothing here deletes a file**. |
+| **Ask which library at startup** | *File* menu, a tick box. When on and there are two or more libraries, launching shows *Which library do you want to open?* (the last one is selected; a library whose file has gone is listed but cannot be chosen). *Don't ask again* in that dialog switches it off, so launch opens the library used last; this tick box switches it back on. `--catalog` and a scripted run never show the dialog. |
 | **Scan / Extract text / Resolve** | The three long jobs, in the toolbar and the Library menu. Each runs on a worker, shows in the Jobs panel with a **Stop** button, and can be stopped at its next safe point (between files, between documents). A stopped job keeps what it finished; run it again to continue. *Resolve* is offline: it reads DOIs and titles from the extracted text and **proposes** them. Nothing is accepted and nothing leaves the computer. |
 | **Documents** | Every live document, **what needs a person first** (unresolved, ambiguous, missing, new) then everything else alphabetically by title. The *Why* column says why a row is where it is; a click on a header re-sorts, *Reset order* returns to the default. The filter box narrows the list by title, author, DOI or path. The sidebar's views (Inbox, Unresolved, …), collections and tags narrow it by scope. |
 | **Details** | One document: its files and whether they are reachable, and each metadata field with its **origin badge** (`O` read from the file, `R` returned by a provider, `I` deduced, `A` stated by a person), whether it is locked, and whether the sources agree (*agrees*, *DIFFERS*, *waiting*, *one source*). |
@@ -27,7 +30,7 @@ and the two see each other's changes.
 
 ## What the window will not do
 
-It never deletes, never moves or renames a file, never applies a plan, never writes to a source PDF, never sends a DOI or a title
+It never deletes anything, never moves or renames a document (*Move catalog* copies a catalog file and leaves the original), never applies a plan, never writes to a source PDF, never sends a DOI or a title
 anywhere (online lookup is `kv resolve --online`, after `kv config set online_lookup true`), and never accepts a proposal unless a
 person pressed the button (or confirmed the batch). It adds no network code.
 
@@ -66,17 +69,30 @@ is a request to a stranger's server. So every label is created plain, tooltips b
 and `text.audit()` walks a live window and reports anything that is not (a test runs it over every tab, and the driven tour ends with
 it). Item views draw their text as plain text; only their tooltips need care.
 
-**What it remembers (`gui/state.py`).** Size, layout, the scope, the selected document, the filter and search text and the tab, in
-`gui-state.json` in the config folder. It is a convenience: a missing, damaged or newer file gives the defaults (a damaged one is
-logged), and a selection saved from another library is not applied to this one. The library's own state is the catalog, so deleting
-the file loses only where the window was. The layout is shared by every library; the selection and filters are kept for one library at a time,
-so going back to a library you left starts at its top, not where you were.
+**What it remembers (`gui/state.py`).** For each library separately: size, layout, the scope, the selected document, the filter and
+search text, the sort and the tab, in `gui-state.json` in the config folder (an entry per library id, so it follows a catalog that was
+copied elsewhere; the 100 most recently used are kept). A library opened for the first time starts from the shape the window last had,
+with nothing selected; the folder the *Add folder* chooser starts in is shared. It is a convenience: a missing, damaged or newer file
+gives the defaults (a damaged one is logged), an older one-library file is still read, and a selection is only ever applied to the
+library it came from. The library's own state is the catalog, so deleting the file loses only where the window was.
 
-**Which library opens (`gui/libraries.py`).** `kv gui --catalog <file>` always opens that file. Without it the window opens the library
-it showed last (`gui-libraries.json` in the config folder: the catalogs opened, their names, and the last one), and falls back to the
-app's own default if that file has gone; it never creates a file to stand in for a missing one. Like the window state it is tolerant of a
+**Which library opens (`gui/libraries.py`).** `kv gui --catalog <file>` always opens that file. Without it, if there are two or more
+libraries and the launch question is on, the window asks (see *Ask which library at startup*); otherwise it opens the library it showed
+last (`gui-libraries.json` in the config folder: the catalogs opened, their names, the last one and the launch-question setting), and
+falls back to the app's own default if that file has gone; it never creates a file to stand in for a missing one. Like the window state it is tolerant of a
 missing, damaged or newer file (an empty list) and written atomically, and a scripted run (the driver) ignores it. It is only a list of
 paths: deleting it forgets the list and nothing else.
+
+**Moving a catalog (`services/catalog_copy.py`).** The documents are the part of a library that cannot be rebuilt, so this is built to be
+unable to harm them. It **copies**: the original catalog is opened read-only and copied with SQLite's backup API (never a file copy, the
+catalog is WAL) into a temporary file the copy itself created, checked (integrity, same library id) and only then renamed into place,
+and the rename refuses to overwrite. The **original is left where it is**, unchanged, for the person to delete if they ever want to; the
+window says where it is. No file in any of the library's folders is opened or changed. A destination inside one of the library's own
+folders is refused (a scan would catalogue the catalog), as is a folder that already holds a `catalog.sqlite`. The extracted-text and
+metadata caches are copied too so extraction need not be redone; they are caches, so failing to copy one is a note, not an error. A
+failure removes only its own temporary file (and a folder it made, if empty). The copy is the same library (same id), the list points at
+it, and if it was the open library the window switches to it. The app's own default library is not movable (`kv` looks for it where it is).
+Anything else that points at the old file (a `kv --catalog` shortcut, an MCP setting) keeps seeing the old copy until it is changed.
 
 ## The in-app driver
 

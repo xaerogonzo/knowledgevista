@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -93,15 +94,33 @@ class Session:
             return False
         from knowledgevista.gui.window import MainWindow
 
+        message = getattr(old, "handover_message", "")
         old.shutdown()  # saves the layout and stops this library's jobs first; the new window reads that state
         new = MainWindow(target, library_id, library_name=name or None, **self._options)
         new.switchRequested.connect(self.switch)
         self.window = new
         if self._visible:
             new.show()
+        if message:
+            new.inform("Catalog copied", message)
         old.close()
         old.deleteLater()
         return True
+
+
+def choose_at_startup(registry: libraries.Registry, list_path: Path | None = None, execute: Callable[[Any], int] | None = None) -> Path | None:
+    """Ask which library to open (the launch dialog). Returns the catalog chosen, or None if the person quit. Ticking "don't ask again" is
+    saved here, so the next launch opens the library used last. `execute` runs the dialog (`exec` by default); a test supplies its own."""
+    from PySide6.QtWidgets import QDialog
+
+    from knowledgevista.gui.dialogs import LibraryChooserDialog
+
+    dialog = LibraryChooserDialog(libraries.known_for_menu(registry), registry.last)
+    accepted = (execute or (lambda d: d.exec()))(dialog) == QDialog.DialogCode.Accepted
+    chosen = dialog.chosen() if accepted else None
+    if chosen is not None and dialog.dont_ask():
+        libraries.save(libraries.with_ask_at_startup(registry, False), list_path)
+    return Path(chosen) if chosen is not None else None
 
 
 def run(catalog: Path | str | None = None, argv: list[str] | None = None) -> int:
@@ -118,6 +137,13 @@ def run(catalog: Path | str | None = None, argv: list[str] | None = None) -> int
     app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv[:1])
     app.setApplicationName("Knowledge Vista")
     app.setOrganizationName("Knowledge Vista")
+    if catalog is None and not scripted:  # an explicit --catalog, or a scripted run, is never second-guessed by a dialog
+        registry = libraries.load()
+        if libraries.should_ask(registry):
+            picked = choose_at_startup(registry)
+            if picked is None:
+                return 0  # the person chose Quit
+            target = picked
     window = make_window(target)
     session = Session(window, visible=not drive.hidden())
     driver = drive.start_if_requested(app, window)  # a scripted run (KNOWLEDGEVISTA_DRIVE); None for a person

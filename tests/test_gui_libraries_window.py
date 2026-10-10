@@ -37,10 +37,13 @@ def hold(window, options=None):
 
 def finish(session, *extra):
     for window in (session.window, *extra):
-        close_dialogs(window)
-        window.shutdown()
-        window.close()
-        window.deleteLater()
+        try:
+            close_dialogs(window)
+            window.shutdown()
+            window.close()
+            window.deleteLater()
+        except RuntimeError:
+            pass  # a window the session replaced has already been deleted
 
 
 def settled(session):

@@ -109,6 +109,65 @@ def test_the_menu_always_offers_the_default_library(tmp_path):
     assert [k.name for k in L.known_for_menu(registry)] == [L.DEFAULT_NAME, "X"], "already listed, so not offered twice"
 
 
+# ------------------------------------------------------------------------------------------------------- renaming, moving, asking
+
+
+def test_renaming_changes_the_name_and_nothing_else(tmp_path):
+    one, two = make_catalog(tmp_path / "one"), make_catalog(tmp_path / "two")
+    registry = L.remembered(L.remembered(L.Registry(), one, "One"), two, "Two")
+    after = L.renamed(registry, one, "  A   better  name ")
+    assert [(k.path, k.name) for k in after.libraries] == [(str(two), "Two"), (str(one), "A better name")] and after.last == registry.last
+    assert L.renamed(registry, one, "   ") == registry, "a blank name changes nothing"
+
+
+def test_renaming_the_default_library_lists_it_first(tmp_path):
+    registry = L.renamed(L.Registry(), paths.catalog_path(), "Everything")
+    assert [(k.path, k.name) for k in registry.libraries] == [(str(paths.catalog_path()), "Everything")]
+    assert [k.name for k in L.known_for_menu(registry)] == ["Everything"], "and it is not offered a second time as 'Default library'"
+
+
+def test_moving_repoints_the_entry_keeping_its_name_place_and_last(tmp_path):
+    old, other, new = (tmp_path / "old" / "catalog.sqlite"), (tmp_path / "other" / "catalog.sqlite"), (tmp_path / "new" / "catalog.sqlite")
+    registry = L.remembered(L.remembered(L.Registry(), other, "Other"), old, "Chemistry")  # old is first and last
+    after = L.moved(registry, old, new)
+    assert [(k.path, k.name) for k in after.libraries] == [(str(new), "Chemistry"), (str(other), "Other")] and after.last == str(new)
+    third = L.moved(L.remembered(L.Registry(), other, "Other"), old, new)  # moving a library that was not listed: it is listed now
+    assert [k.name for k in third.libraries] == [L.label_for(new), "Other"] and third.last == str(other)
+
+
+def test_moving_onto_a_path_already_listed_does_not_duplicate_it(tmp_path):
+    old, new = tmp_path / "old" / "catalog.sqlite", tmp_path / "new" / "catalog.sqlite"
+    registry = L.remembered(L.remembered(L.Registry(), new, "Stale entry"), old, "Chemistry")
+    after = L.moved(registry, old, new)
+    assert [(k.path, k.name) for k in after.libraries] == [(str(new), "Chemistry")]
+
+
+def test_the_startup_question_is_a_setting_that_survives_every_edit(tmp_path):
+    assert L.Registry().ask_at_startup is True
+    listing = tmp_path / "libs.json"
+    a, b, c = (tmp_path / n / "catalog.sqlite" for n in "abc")
+    off = L.with_ask_at_startup(L.remembered(L.Registry(), a, "A"), False)
+    L.save(off, listing)
+    assert L.load(listing).ask_at_startup is False
+    edited = L.moved(L.renamed(L.forgotten(L.remembered(off, b), b), a, "AA"), a, c)
+    assert edited.ask_at_startup is False, "no edit of the list silently turns the question back on"
+    listing.write_text(json.dumps({"format": L.LIBRARIES_FORMAT, "ask_at_startup": "no", "libraries": []}), encoding="utf-8")
+    assert L.load(listing).ask_at_startup is True, "a value that is not a boolean is not believed"
+
+
+def test_the_startup_question_is_asked_only_when_there_is_a_real_choice(tmp_path):
+    one, two = make_catalog(tmp_path / "one"), make_catalog(tmp_path / "two")
+    gone = tmp_path / "gone" / "catalog.sqlite"
+    assert not L.should_ask(L.Registry()), "nothing known"
+    assert not L.should_ask(L.remembered(L.Registry(), one)), "one library is not a choice"
+    assert not L.should_ask(L.remembered(L.remembered(L.Registry(), one), gone)), "a library whose file has gone is not a choice"
+    both = L.remembered(L.remembered(L.Registry(), one), two)
+    assert L.should_ask(both)
+    assert not L.should_ask(L.with_ask_at_startup(both, False)), "switched off"
+    make_catalog(paths.catalog_path().parent, paths.catalog_path().name)
+    assert L.should_ask(L.remembered(L.Registry(), one)), "the app's own library counts once it exists"
+
+
 # ------------------------------------------------------------------------------------------------------- which library `kv gui` opens
 
 
