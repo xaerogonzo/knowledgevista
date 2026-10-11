@@ -764,7 +764,7 @@ def test_the_window_remembers_where_a_person_was(qapp, lab, tmp_path):
     first.tabs.setCurrentIndex(2)
     first.doc_table.sortByColumn(1, Qt.SortOrder.DescendingOrder)
     first.close()
-    saved = S.load(state_path)
+    saved = S.load(state_path, first.library_id)
     assert (saved.scope, saved.filter_text, saved.search_text, saved.tab, saved.sort_column, saved.sort_descending) == ("all", "papers", "aqueous", "review", 1, True)
     assert saved.document_id == lab.doc("papers/aqueous.pdf") and saved.geometry and saved.layout
 
@@ -857,5 +857,5 @@ def test_shutting_down_twice_does_nothing_the_second_time(qapp, lab, tmp_path):
     assert made.shutdown() is True
     made.filter_box.setText("second")
     assert made.shutdown() is True
-    assert S.load(state_path).filter_text == "first", "the second shutdown must not save again"
+    assert S.load(state_path, made.library_id).filter_text == "first", "the second shutdown must not save again"
     made.close()

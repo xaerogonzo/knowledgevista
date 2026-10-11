@@ -85,3 +85,9 @@ def gui_state_path() -> Path:
     """What the library window remembers between runs (config): size, layout, the scope and document it was showing. A convenience,
     never state of the library: deleting it loses nothing but where the window was."""
     return config_dir() / "gui-state.json"
+
+
+def gui_libraries_path() -> Path:
+    """The libraries (catalogs) the window has opened, and the one it opened last (config). A convenience like `gui_state_path`: deleting it
+    loses only the list; the libraries themselves are the catalog files, which this never touches."""
+    return config_dir() / "gui-libraries.json"
